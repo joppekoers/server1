@@ -171,25 +171,13 @@ services:
       - ./runtimeGenerated/pixels/postgres-db:/var/lib/postgresql/data
 
   github-runner-celebratix:
-      container_name: github-runner-celebratix
-      image: ghcr.io/celebratix/docker-github-actions-runner:ubuntu-latest
-      restart: unless-stopped
-        # deploy:
-        #       mode: replicated
-        # replicas: 2
-      environment:
-          - RUNNER_NAME_PREFIX=server1
-          - RUNNER_SCOPE=org
-          - ORG_NAME=Celebratix
-          - RUNNER_WORKDIR=/runner/work
-          - CONFIGURED_ACTIONS_RUNNER_FILES_DIR=/runner/persistent
-          - DISABLE_AUTOMATIC_DEREGISTRATION=true
-      env_file:
-          - ./github-runner-celebratix/.env
-      volumes:
-          - /var/run/docker.sock:/var/run/docker.sock
-          - ./runtimeGenerated/github-runner-celebratix/runner/persistent:/runner/persistent
-          - ./runtimeGenerated/github-runner-celebratix/runner/work:/runner/work
+    container_name: github-runner-celebratix
+    image: ghcr.io/celebratix/docker-github-actions-runner:ubuntu-latest
+    restart: unless-stopped
+    command: https://github.com/Celebratix AHTP3JFWJWP2YCC2XF5ZLJLH6QC72 server1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./runtimeGenerated/github-runner-celebratix/root:/root
 
   nextcloud-aio-mastercontainer:
     image: nextcloud/all-in-one:latest
