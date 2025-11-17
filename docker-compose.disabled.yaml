@@ -68,6 +68,17 @@ services:
       - TZ=Europe/Amsterdam
       - SAMBA_LOG_LEVEL=0
 
+  spacedrive:
+    container_name: spacedrive
+    image: ghcr.io/spacedriveapp/spacedrive/server
+    ports:
+      - 1112:8080
+    env_file:
+      - ./spacedrive/.env
+    volumes:
+      - ./runtimeGenerated/spacedrive/var/spacedrive:/var/spacedrive
+      - /home/joppe/files:/files
+
   nfs:
     container_name: nfs
     restart: unless-stopped
@@ -86,3 +97,24 @@ services:
       - 2049:2049
       - 32765:32765
       - 32767:32767
+
+  nextcloud-aio-mastercontainer:
+    image: nextcloud/all-in-one:latest
+    init: true
+    container_name: nextcloud-aio-mastercontainer
+    restart: always
+    # ports:
+    #   - 4343:8080
+    environment:
+      - APACHE_PORT=11000
+      - APACHE_IP_BINDING=0.0.0.0
+      - APACHE_ADDITIONAL_NETWORK=server1_default
+      - SKIP_DOMAIN_VALIDATION=true
+    volumes:
+      - nextcloud_aio_mastercontainer:/mnt/docker-aio-config
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+volumes:
+  nextcloud_aio_mastercontainer:
+    external: true
+    name: nextcloud_aio_mastercontainer

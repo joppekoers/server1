@@ -29,7 +29,7 @@ services:
       - WATCHTOWER_INCLUDE_RESTARTING=true
       - WATCHTOWER_POLL_INTERVAL=300
       - WATCHTOWER_ROLLING_RESTART=true
-    command: joppekoers.nl pixels cms github-runner-celebratix
+    command: joppekoers.nl pixels cms github-runner-celebratix-1 github-runner-celebratix-2
 
   plex:
     container_name: plex
@@ -117,17 +117,6 @@ services:
     ports:
       - 1111:80
 
-  spacedrive:
-    container_name: spacedrive
-    image: ghcr.io/spacedriveapp/spacedrive/server
-    ports:
-      - 1112:8080
-    env_file:
-      - ./spacedrive/.env
-    volumes:
-      - ./runtimeGenerated/spacedrive/var/spacedrive:/var/spacedrive
-      - /home/joppe/files:/files
-
   datadog-agent:
     container_name: datadog-agent
     image: gcr.io/datadoghq/agent
@@ -170,40 +159,25 @@ services:
     volumes:
       - ./runtimeGenerated/pixels/postgres-db:/var/lib/postgresql/data
 
-  github-runner-celebratix:
-    container_name: github-runner-celebratix
+  github-runner-celebratix-1:
+    container_name: github-runner-celebratix-1
     image: ghcr.io/celebratix/docker-github-actions-runner:ubuntu-latest
     restart: unless-stopped
-    command: https://github.com/Celebratix AHTP3JFWJWP2YCC2XF5ZLJLH6QC72 server1
+    # https://github.com/organizations/Celebratix/settings/actions/runners/new
+    command: https://github.com/Celebratix AHTP3JFWFZGQ3YP4KWOSXQLJDMFTS joppe-server1-1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./runtimeGenerated/github-runner-celebratix/root:/root
+      - ./runtimeGenerated/github-runner-celebratix-1/root:/root
 
-  nextcloud-aio-mastercontainer:
-    image: nextcloud/all-in-one:latest
-    init: true
-    container_name: nextcloud-aio-mastercontainer
-    restart: always
-    # ports:
-    #   - 4343:8080
-    environment:
-      - APACHE_PORT=11000
-      - APACHE_IP_BINDING=0.0.0.0
-      - APACHE_ADDITIONAL_NETWORK=server1_default
-      - SKIP_DOMAIN_VALIDATION=true
-    volumes:
-      - nextcloud_aio_mastercontainer:/mnt/docker-aio-config
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-
-  factorio:
-    container_name: factorio
+  github-runner-celebratix-2:
+    container_name: github-runner-celebratix-2
+    image: ghcr.io/celebratix/docker-github-actions-runner:ubuntu-latest
     restart: unless-stopped
-    image: factoriotools/factorio
-    ports:
-      - 34197:34197/udp
-      - 27015:27015/tcp
+    # https://github.com/organizations/Celebratix/settings/actions/runners/new
+    command: https://github.com/Celebratix AHTP3JE6GOZAE2SEEKJ3DFTJDMFYE joppe-server1-2
     volumes:
-      - ./runtimeGenerated/factorio:/factorio
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./runtimeGenerated/github-runner-celebratix-2/root:/root
 
   tunnel:
     container_name: tunnel
@@ -245,10 +219,3 @@ services:
         condition: service_started
       jellyfin:
         condition: service_started
-      # nextcloud-aio-mastercontainer:
-      #   condition: service_started
-
-volumes:
-  nextcloud_aio_mastercontainer:
-    external: true
-    name: nextcloud_aio_mastercontainer
