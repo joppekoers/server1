@@ -31,32 +31,6 @@ services:
       - WATCHTOWER_ROLLING_RESTART=true
     command: joppekoers.nl pixels cms github-runner-celebratix-1 github-runner-celebratix-2
 
-  plex:
-    container_name: plex
-    restart: unless-stopped
-    image: ghcr.io/linuxserver/plex
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - VERSION=docker
-      - PLEX_CLAIM=claim-Le_ex28z3gJAske8w7nZ
-    ports:
-      - 32400:32400
-      - 1900:1900/udp
-      - 3005:3005
-      - 5354:5353/udp # should be the same port, but on ubunutu ahavi-daemon uses the 5353 port already
-      - 8324:8324
-      - 32410:32410/udp
-      - 32412:32412/udp
-      - 32413:32413/udp
-      - 32414:32414/udp
-      - 32469:32469
-    volumes:
-      - ./runtimeGenerated/plex/config:/config
-      - ${HOME}/files/series:/mnt/series
-      - ${HOME}/files/films:/mnt/films
-      - ${HOME}/files/torrents/downloaded:/mnt/torrents
-
   # https://jellyfin.org/docs/general/installation/container
   jellyfin:
     container_name: jellyfin
@@ -90,23 +64,6 @@ services:
       - ./runtimeGenerated/qbittorrent/config:/config
       - ${HOME}/files/torrents/:/mnt/files
 
-  syncthing:
-    container_name: syncthing
-    restart: unless-stopped
-    image: syncthing/syncthing
-    environment:
-      - PUID=1000
-      - PGID=1000
-    volumes:
-      - ./runtimeGenerated/syncthing/var/syncthing:/var/syncthing
-      - /home/joppe/files/sync:/sync
-      - /home/joppe/git:/git
-      - /home/joppe/git_deleted:/git_deleted
-    ports:
-      - 22000:22000/tcp # TCP file transfers
-      - 22000:22000/udp # QUIC file transfers
-      - 21027:21027/udp # Receive local discovery broadcasts
-
   filebrowser:
     container_name: filebrowser
     image: filebrowser/filebrowser
@@ -116,20 +73,6 @@ services:
       - ./runtimeGenerated/filebrowser/.filebrowser.json:/.filebrowser.json
     ports:
       - 1111:80
-
-  datadog-agent:
-    container_name: datadog-agent
-    image: gcr.io/datadoghq/agent
-    pid: host
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /proc/:/host/proc/:ro
-      - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
-    env_file: ./datadog-agent/.env
-    environment:
-      - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
-    ports:
-      - 10001:8125/udp
 
   pixels:
     container_name: pixels
@@ -164,7 +107,7 @@ services:
     image: ghcr.io/celebratix/docker-github-actions-runner:ubuntu-latest
     restart: unless-stopped
     # https://github.com/organizations/Celebratix/settings/actions/runners/new
-    command: https://github.com/Celebratix AHTP3JFWFZGQ3YP4KWOSXQLJDMFTS joppe-server1-1
+    command: https://github.com/Celebratix AHTP3JEOUNIYWEYKNJNZ253JTWHLU server1-1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./runtimeGenerated/github-runner-celebratix-1/root:/root
@@ -174,7 +117,7 @@ services:
     image: ghcr.io/celebratix/docker-github-actions-runner:ubuntu-latest
     restart: unless-stopped
     # https://github.com/organizations/Celebratix/settings/actions/runners/new
-    command: https://github.com/Celebratix AHTP3JE6GOZAE2SEEKJ3DFTJDMFYE joppe-server1-2
+    command: https://github.com/Celebratix AHTP3JA4S4BHESYQG5UPB3LJEJPZM server1-2
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./runtimeGenerated/github-runner-celebratix-2/root:/root
