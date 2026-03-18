@@ -1,14 +1,14 @@
 services:
   joppekoers.nl:
     container_name: joppekoers.nl
-    image: ghcr.io/sirmorfield/joppekoers.nl/frontend
+    image: ghcr.io/joppekoers/joppekoers.nl/frontend
     restart: unless-stopped
     environment:
       - PORT=8080
 
   cms:
     container_name: cms
-    image: ghcr.io/sirmorfield/joppekoers.nl/cms
+    image: ghcr.io/joppekoers/joppekoers.nl/cms
     restart: unless-stopped
     volumes:
       - ./runtimeGenerated/cms/projects:/app/projects
@@ -152,11 +152,7 @@ services:
         condition: service_started
       cms:
         condition: service_started
-      plex:
-        condition: service_started
       qbittorrent:
-        condition: service_started
-      syncthing:
         condition: service_started
       filebrowser:
         condition: service_started
