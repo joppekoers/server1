@@ -67,6 +67,7 @@ services:
   filerun:
     container_name: filerun
     image: filerun/filerun
+    user: "1001:1001"
     environment:
       FR_DB_HOST: filerun-db
       FR_DB_PORT: 3306
@@ -75,20 +76,21 @@ services:
       FR_DB_PASS: filerun
     depends_on:
       - filerun-db
+    links:
+      - filerun-db:filerun-db
     volumes:
       - /home/joppe:/user-files
       - ./runtimeGenerated/filerun/html:/var/www/html
     ports:
-      - 1111:80
-
+      - "1111:80"
   filerun-db:
-    container_name: filerun-db
-    image: mariadb:10.11
+    image: mariadb:12.2
     environment:
-      MYSQL_ROOT_PASSWORD: filerun
+      MARIADB_ROOT_PASSWORD: filerun
       MYSQL_DATABASE: filerun
       MYSQL_USER: filerun
       MYSQL_PASSWORD: filerun
+      MARIADB_AUTO_UPGRADE: 1
     volumes:
       - ./runtimeGenerated/filerun-db:/var/lib/mysql
 
