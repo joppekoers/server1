@@ -13,3 +13,7 @@
 /samba/password_joppe
 /restic/password.txt
 .env
+
+/duplicity/duplicity_backup.sh
+/duplicity/rclone*.json
+/host
