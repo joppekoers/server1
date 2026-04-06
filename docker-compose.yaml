@@ -147,6 +147,7 @@ services:
       - 443:443
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./host:/host:ro
     depends_on:
       joppekoers.nl:
         condition: service_started
