@@ -74,6 +74,7 @@ services:
       FR_DB_NAME: filerun
       FR_DB_USER: filerun
       FR_DB_PASS: filerun
+      FR_DB_ROOT_PASS: filerun
     depends_on:
       - filerun-db
     links:
@@ -85,6 +86,7 @@ services:
       - "1111:80"
   filerun-db:
     image: mariadb:12.2
+    command: --old-mode=NO_PROGRESS_INFO
     environment:
       MARIADB_ROOT_PASSWORD: filerun
       MYSQL_DATABASE: filerun
