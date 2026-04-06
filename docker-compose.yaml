@@ -64,15 +64,33 @@ services:
       - ./runtimeGenerated/qbittorrent/config:/config
       - ${HOME}/files/torrents/:/mnt/files
 
-  filebrowser:
-    container_name: filebrowser
-    image: filebrowser/filebrowser
+  filerun:
+    container_name: filerun
+    image: filerun/filerun
+    environment:
+      FR_DB_HOST: filerun-db
+      FR_DB_PORT: 3306
+      FR_DB_NAME: filerun
+      FR_DB_USER: filerun
+      FR_DB_PASS: filerun
+    depends_on:
+      - filerun-db
     volumes:
-      - /home/joppe:/srv
-      - ./runtimeGenerated/filebrowser/database.db:/database.db
-      - ./runtimeGenerated/filebrowser/.filebrowser.json:/.filebrowser.json
+      - /home/joppe:/user-files
+      - ./runtimeGenerated/filerun/html:/var/www/html
     ports:
       - 1111:80
+
+  filerun-db:
+    container_name: filerun-db
+    image: mariadb:10.11
+    environment:
+      MYSQL_ROOT_PASSWORD: filerun
+      MYSQL_DATABASE: filerun
+      MYSQL_USER: filerun
+      MYSQL_PASSWORD: filerun
+    volumes:
+      - ./runtimeGenerated/filerun-db:/var/lib/mysql
 
   pixels:
     container_name: pixels
@@ -155,7 +173,7 @@ services:
         condition: service_started
       qbittorrent:
         condition: service_started
-      filebrowser:
+      filerun:
         condition: service_started
       jellyfin:
         condition: service_started
