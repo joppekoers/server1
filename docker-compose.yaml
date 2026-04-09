@@ -29,7 +29,7 @@ services:
       - WATCHTOWER_INCLUDE_RESTARTING=true
       - WATCHTOWER_POLL_INTERVAL=300
       - WATCHTOWER_ROLLING_RESTART=true
-    command: joppekoers.nl pixels cms github-runner-celebratix-1 github-runner-celebratix-2
+    command: joppekoers.nl pixels cms
 
   # https://jellyfin.org/docs/general/installation/container
   jellyfin:
@@ -124,26 +124,6 @@ services:
     volumes:
       - ./runtimeGenerated/pixels/postgres-db:/var/lib/postgresql/data
 
-  github-runner-celebratix-1:
-    container_name: github-runner-celebratix-1
-    image: ghcr.io/celebratix/docker-github-actions-runner:ubuntu-latest
-    restart: unless-stopped
-    # https://github.com/organizations/Celebratix/settings/actions/runners/new
-    command: https://github.com/Celebratix AHTP3JEOUNIYWEYKNJNZ253JTWHLU server1-1
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./runtimeGenerated/github-runner-celebratix-1/root:/root
-
-  github-runner-celebratix-2:
-    container_name: github-runner-celebratix-2
-    image: ghcr.io/celebratix/docker-github-actions-runner:ubuntu-latest
-    restart: unless-stopped
-    # https://github.com/organizations/Celebratix/settings/actions/runners/new
-    command: https://github.com/Celebratix AHTP3JA4S4BHESYQG5UPB3LJEJPZM server1-2
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./runtimeGenerated/github-runner-celebratix-2/root:/root
-
   tunnel:
     container_name: tunnel
     depends_on:
@@ -181,3 +161,11 @@ services:
         condition: service_started
       jellyfin:
         condition: service_started
+
+  movie-sync:
+    container_name: movie-sync
+    build: ./movie-sync
+    restart: unless-stopped
+    volumes:
+      - ${HOME}/files/torrents/downloaded:/input:ro
+      - ${HOME}/files/movies-web:/output
