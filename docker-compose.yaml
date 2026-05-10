@@ -166,6 +166,14 @@ services:
     container_name: movie-sync
     build: ./movie-sync
     restart: unless-stopped
+    user: "1000:1000"
     volumes:
       - ${HOME}/files/torrents/downloaded:/input:ro
       - ${HOME}/files/movies-web:/output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
