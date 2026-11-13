@@ -167,6 +167,7 @@ services:
     build: ./movie-sync
     restart: unless-stopped
     user: "1000:1000"
+    profiles: ["donotstart"]
     volumes:
       - ${HOME}/files/torrents/downloaded:/input:ro
       - ${HOME}/files/movies-web:/output

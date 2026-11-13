@@ -8,11 +8,11 @@ const DEBOUNCE_MS = 5_000;
 const VIDEO_EXTENSIONS = new Set([".mkv", ".mp4", "avi"]);
 const EXCLUDED_LANGUAGES = new Set(["rus", "ru", "ukr", "uk"]);
 const COMPATIBLE_AUDIO_CODECS = new Set(["aac", "mp3", "opus"]);
-const PARALLEL_JOBS = 2;
+const PARALLEL_JOBS = 1;
 
 async function detectGpu() {
   const proc = Bun.spawn(
-    ["ffmpeg", "-f", "lavfi", "-i", "nullsrc=s=16x16:d=0.1", "-c:v", "hevc_nvenc", "-f", "null", "-"],
+    ["ffmpeg", "-f", "lavfi", "-i", "nullsrc=s=16x16:d=0.1", "-c:v", "av1_nvenc", "-f", "null", "-"],
     { stdout: "pipe", stderr: "pipe" },
   );
   const exitCode = await proc.exited;
@@ -123,6 +123,8 @@ async function processFile(inputPath: string, outputPath: string) {
     "-y",
     "-loglevel",
     "error",
+    "-stats_period", "10",
+    "-progress", "pipe:1",
     "-i",
     inputPath,
     "-map",
@@ -136,9 +138,9 @@ async function processFile(inputPath: string, outputPath: string) {
   }
 
   if (HAS_GPU) {
-    args.push("-c:v", "hevc_nvenc", "-tag:v", "hvc1", "-preset", "medium", "-cq", "18");
+    args.push("-c:v", "av1_nvenc", "-preset", "slow", "-cq", "18");
   } else {
-    args.push("-c:v", "libx265", "-tag:v", "hvc1", "-preset", "medium", "-crf", "18", "-threads", "0");
+    args.push("-c:v", "libsvtav1", "-preset", "6", "-crf", "18", "-threads", "0");
   }
 
   args.push("-c:a", audioNeedsTranscode ? "aac" : "copy");
@@ -158,10 +160,34 @@ async function processFile(inputPath: string, outputPath: string) {
 
   args.push(outputPath);
 
-  console.log(`Processing ${inputPath} → ${outputPath}`);
-  console.log(`  Video: transcode (HEVC), Audio: ${audioNeedsTranscode ? "transcode" : "copy"}`);
+  const name = basename(outputPath);
+  console.log(`Processing ${name}`);
+  console.log(`  Video: transcode (AV1), Audio: ${audioNeedsTranscode ? "transcode" : "copy"}`);
 
-  const proc = Bun.spawn(args, { stdout: "inherit", stderr: "inherit" });
+  const proc = Bun.spawn(args, { stdout: "pipe", stderr: "inherit" });
+
+  const reader = proc.stdout.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  (async () => {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split("progress=");
+      buffer = blocks.pop()!;
+      for (const block of blocks) {
+        const lines = block.split("\n");
+        const get = (key: string) => lines.find((l) => l.startsWith(key + "="))?.split("=")[1];
+        const time = get("out_time")?.replace(/\..*/, "");
+        const speed = get("speed");
+        const fps = get("fps");
+        if (time) console.log(`  [${name}] ${time} | ${fps} fps | ${speed}`);
+      }
+    }
+  })();
+
   const exitCode = await proc.exited;
 
   if (exitCode !== 0) {
@@ -277,7 +303,7 @@ async function startWatching() {
 }
 
 console.log("Movie sync started");
-console.log(`GPU: ${HAS_GPU ? "detected (using hevc_nvenc)" : "not detected (using libx265)"}`);
+console.log(`GPU: ${HAS_GPU ? "detected (using av1_nvenc)" : "not detected (using libsvtav1)"}`);
 console.log(`Watching ${INPUT_DIR} → ${OUTPUT_DIR}`);
 console.log(`fs.watch with ${POLL_INTERVAL / 1000}s fallback poll`);
 
