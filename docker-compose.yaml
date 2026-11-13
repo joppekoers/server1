@@ -6,9 +6,15 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
     volumes:
-      - ./runtimeGenerated/joppekoers.nl/projects:/app/backend/projects
+      - ./runtimeGenerated/joppekoers.nl/cdn:/app/cdn
+      - ./runtimeGenerated/joppekoers.nl/cache:/app/cache
       - ./runtimeGenerated/joppekoers.nl/media:/app/backend/media
       - ./runtimeGenerated/joppekoers.nl/uploads:/app/backend/uploads
+    environment:
+      - PROJECTS_DIR=/app/cdn/projectImg
+      - CACHE_DIR=/app/cache
+      - CDN_REPO_DIR=/app/cdn
+      - SYNC_TOKEN=${SYNC_TOKEN:?SYNC_TOKEN must be set}
 
   watchtower:
     container_name: watchtower

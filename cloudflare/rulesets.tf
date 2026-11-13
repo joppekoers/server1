@@ -5,6 +5,19 @@ resource "cloudflare_ruleset" "nl_firewall_custom" {
   phase   = "http_request_firewall_custom"
   rules = [
     {
+      description = "Allow cdn sync webhook"
+      expression  = "(http.host eq \"joppekoers.nl\" and http.request.method eq \"POST\" and http.request.uri.path eq \"/api/sync-cdn\")"
+      action      = "skip"
+      action_parameters = {
+        ruleset  = "current"
+        phases   = ["http_request_firewall_managed", "http_request_sbfm", "http_ratelimit"]
+        products = ["bic", "securityLevel", "uaBlock", "zoneLockdown", "waf", "rateLimit", "hot"]
+      }
+      logging = {
+        enabled = true
+      }
+    },
+    {
       description = "skip challenge for watchtower deploy hook"
       expression  = "(http.host eq \"joppekoers.nl\" and starts_with(http.request.uri.path, \"/watchtower/\"))"
       action      = "skip"
