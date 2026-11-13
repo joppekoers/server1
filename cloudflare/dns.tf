@@ -179,3 +179,22 @@ resource "cloudflare_dns_record" "com_dev" {
   proxied = true
   ttl     = 1
 }
+
+# Originless placeholders so requests reach Cloudflare, where com_redirect sends them to joppekoers.nl.
+resource "cloudflare_dns_record" "com_apex" {
+  zone_id = cloudflare_zone.com.id
+  name    = "joppekoers.com"
+  type    = "AAAA"
+  content = "100::"
+  proxied = true
+  ttl     = 1
+}
+
+resource "cloudflare_dns_record" "com_www" {
+  zone_id = cloudflare_zone.com.id
+  name    = "www.joppekoers.com"
+  type    = "AAAA"
+  content = "100::"
+  proxied = true
+  ttl     = 1
+}

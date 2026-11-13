@@ -17,13 +17,8 @@ resource "cloudflare_ruleset" "nl_firewall_custom" {
     },
     {
       description = "always challenge"
-      expression  = "(http.host ne \"pixels.joppekoers.nl\")"
+      expression  = "(not http.host in {\"joppekoers.nl\" \"pixels.joppekoers.nl\"})"
       action      = "managed_challenge"
-    },
-    {
-      description = "block filerun"
-      expression  = "(http.host eq \"files.joppekoers.nl\")"
-      action      = "block"
     },
   ]
 }
