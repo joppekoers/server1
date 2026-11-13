@@ -17,3 +17,9 @@
 /duplicity/duplicity_backup.sh
 /duplicity/rclone*.json
 /host
+
+/cloudflare/.env
+/cloudflare/.terraform
+/cloudflare/terraform.tfstate
+/cloudflare/terraform.tfstate.backup
+/cloudflare/*.tfplan

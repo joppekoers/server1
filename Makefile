@@ -1,5 +1,8 @@
 SECRETSFILE = inject-secrets.sh
 SECRETSFILE_ENCRYPTED = $(SECRETSFILE).gpg
+TF_DIR = cloudflare
+TF_STATE = $(TF_DIR)/terraform.tfstate
+TF = $(TF_DIR)/run.sh terraform
 
 # Colors
 RESET = \033[0;0m
@@ -29,6 +32,25 @@ inject: $(SECRETSFILE)
 encrypt:
 	gpg --yes --no-symkey-cache --symmetric --output $(SECRETSFILE_ENCRYPTED) $(SECRETSFILE)
 	git add $(SECRETSFILE_ENCRYPTED)
+
+$(TF_STATE): $(TF_STATE).gpg
+	gpg --yes --output $(TF_STATE) --decrypt $(TF_STATE).gpg
+
+$(TF_DIR)/.terraform: $(TF_DIR)/Dockerfile $(TF_DIR)/providers.tf
+	docker build -q -t cf-tools $(TF_DIR)
+	$(TF) init
+	touch $(TF_DIR)/.terraform
+
+tf-plan: $(TF_STATE) $(TF_DIR)/.terraform
+	$(TF) plan
+
+tf-apply: $(TF_STATE) $(TF_DIR)/.terraform
+	$(TF) apply
+	$(MAKE) tf-encrypt
+
+tf-encrypt:
+	gpg --yes --no-symkey-cache --symmetric --output $(TF_STATE).gpg $(TF_STATE)
+	git add $(TF_STATE).gpg
 
 stop: down
 down:
