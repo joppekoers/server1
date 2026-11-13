@@ -4,7 +4,6 @@ locals {
     always_online            = "off"
     automatic_https_rewrites = "on"
     brotli                   = "on"
-    browser_cache_ttl        = 14400
     browser_check            = "on"
     cache_level              = "aggressive"
     challenge_ttl            = 1800
@@ -45,12 +44,14 @@ locals {
 
   zone_settings = {
     nl = merge(local.common_zone_settings, {
-      always_use_https = "on"
-      ssl              = "flexible"
+      always_use_https  = "on"
+      browser_cache_ttl = 0
+      ssl               = "flexible"
     })
     com = merge(local.common_zone_settings, {
-      always_use_https = "off"
-      ssl              = "full"
+      always_use_https  = "off"
+      browser_cache_ttl = 14400
+      ssl               = "full"
     })
   }
 }

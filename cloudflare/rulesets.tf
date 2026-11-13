@@ -50,3 +50,22 @@ resource "cloudflare_ruleset" "com_redirect" {
     },
   ]
 }
+
+resource "cloudflare_ruleset" "nl_cache" {
+  zone_id = cloudflare_zone.nl.id
+  name    = "Cache settings"
+  kind    = "zone"
+  phase   = "http_request_cache_settings"
+  rules = [
+    {
+      description = "respect origin cache-control"
+      expression  = "(http.host eq \"joppekoers.nl\")"
+      action      = "set_cache_settings"
+      action_parameters = {
+        cache       = true
+        edge_ttl    = { mode = "respect_origin" }
+        browser_ttl = { mode = "respect_origin" }
+      }
+    },
+  ]
+}
