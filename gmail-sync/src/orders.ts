@@ -72,11 +72,14 @@ const EXTRACTION_SCHEMA = {
   ],
 };
 
-const SYSTEM_PROMPT = `You classify emails about online orders and parcel deliveries.
-Set isOrderEmail to true only for transactional emails about a specific order or shipment: order confirmations, shipping notifications, tracking codes, out-for-delivery, delivered, delay, cancellation or return notices. Newsletters, promotions, reviews requests and receipts for in-store purchases are false.
-status meanings: ordered = order placed/confirmed, shipped = handed to carrier or tracking code sent, out_for_delivery = arriving today, delivered, delayed, cancelled, returned.
-items lists every product in the order. name is the product name as a shopper would say it (e.g. "Oversized Cotton T-Shirt - Black, M"), never an article number, SKU or code; if the email only shows codes, name is null. sku is the article/product code if shown. quantity is the number ordered.
-Copy order numbers, tracking numbers and URLs exactly as written. Use null for anything not stated. estimatedDelivery is an ISO date (YYYY-MM-DD) or null.`;
+const SYSTEM_PROMPT = `You extract online order and parcel delivery details from one email.
+Set isOrderEmail to true only for a transactional email about one specific purchase or shipment of the recipient: an order confirmation, shipping or tracking notification, out-for-delivery, delivered, delay, cancellation or return notice.
+Set isOrderEmail to false for everything else, including newsletters, promotions, review requests, account and security notices, bank, savings and investment messages, receipts for subscriptions or services, appointment confirmations, monitoring alerts and receipts for in-store purchases.
+Only use information that is written in this email. Never guess, invent or use example values. Anything not in the email is null, and items is an empty list when no products are listed.
+Copy orderNumber, trackingNumber and trackingUrl character for character from the email.
+items lists every product in the order. name is the product name copied as written in the email, without article numbers or codes; if the email only shows codes, name is null. sku is the article or product code if shown. quantity is the number ordered, or null if not stated.
+status meanings: ordered = order placed or confirmed, shipped = handed to carrier or tracking code sent, out_for_delivery = arriving today, delivered, delayed, cancelled, returned.
+estimatedDelivery is the delivery date stated in the email as an ISO date (YYYY-MM-DD), otherwise null.`;
 
 // Ollama has no internet access, so a missing model has to be pulled by hand (see README).
 export async function ensureModel() {
@@ -111,10 +114,40 @@ function userMessage(email: StoredEmail) {
   return `From: ${email.from}\nSubject: ${email.subject}\nReceived: ${email.receivedAt}\n\n${body}`;
 }
 
+const PLACEHOLDER = /^(n\/?a|none|null|unknown|-|\?)$/i;
+const MIN_REFERENCE_CHARS = 4;
+const searchable = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+
+// The model sometimes invents order numbers and products, so only values that appear in the email are kept.
+function groundExtraction(extraction: Extraction, email: StoredEmail): Extraction {
+  const source = searchable([email.subject ?? "", email.text, htmlToText(email.html)].join(" "));
+  const found = (value: string | null, minChars = 1) => {
+    const key = value && !PLACEHOLDER.test(value.trim()) ? searchable(value) : "";
+    return key.length >= minChars && source.includes(key) ? value : null;
+  };
+  return {
+    ...extraction,
+    orderNumber: found(extraction.orderNumber, MIN_REFERENCE_CHARS),
+    trackingNumber: found(extraction.trackingNumber, MIN_REFERENCE_CHARS),
+    trackingUrl: found(extraction.trackingUrl, MIN_REFERENCE_CHARS),
+    items: extraction.items
+      .map((item) => ({ ...item, name: found(item.name), sku: found(item.sku) }))
+      .filter((item) => item.name || item.sku),
+  };
+}
+
 // Anything that can change the model output is hashed, so editing the prompt, schema or input formatting re-parses stored emails.
 export const EXTRACTION_VERSION = createHash("sha256")
   .update(
-    JSON.stringify([MODEL, MODEL_OPTIONS, SYSTEM_PROMPT, EXTRACTION_SCHEMA, htmlToText.toString(), userMessage.toString()]),
+    JSON.stringify([
+      MODEL,
+      MODEL_OPTIONS,
+      SYSTEM_PROMPT,
+      EXTRACTION_SCHEMA,
+      htmlToText.toString(),
+      userMessage.toString(),
+      groundExtraction.toString(),
+    ]),
   )
   .digest("hex")
   .slice(0, 16);
@@ -176,7 +209,9 @@ async function extract(email: StoredEmail): Promise<Extraction | null | Error> {
   const content = await readChatStream(res.body);
   if (content instanceof Error) return content;
   if (NOT_AN_ORDER.test(content)) return null;
-  return parseJson<Extraction>(content);
+  const extraction = parseJson<Extraction>(content);
+  if (extraction instanceof Error) return extraction;
+  return groundExtraction(extraction, email);
 }
 
 async function timedExtract(email: StoredEmail) {
