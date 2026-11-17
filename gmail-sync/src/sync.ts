@@ -212,6 +212,7 @@ async function pullNotifications() {
 }
 
 await ensureModel();
+setKv("emailAddress", (await api<{ emailAddress: string }>(`${GMAIL}/profile`)).emailAddress);
 const state: State = {
   historyId: getKv("historyId"),
   watchExpiration: Number(getKv("watchExpiration") ?? 0) || undefined,

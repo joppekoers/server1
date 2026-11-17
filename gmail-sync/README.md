@@ -81,7 +81,9 @@ The first line is the health of the service:
 
 The table lists all open orders plus orders finished (delivered, cancelled, returned) in the last 14 days, newest first.
 
-- `width` sets the maximum line width: 30 to 300, default 120. When the table does not fit, the products column shrinks first, then columns are dropped (products, order, ETA, updated, shop). Status always stays.
+- Products show names only, never article codes. Cells wrap over at most 4 lines per order; anything beyond ends with `…`.
+- Under each order are links to its 4 most recent emails, newest first, with the status that email set and its age. Links open Gmail in the account the service is logged in to (`mail.google.com/mail/u/<your address>/#all/<message id>`). Links are never cut off; when a line with status and age does not fit, only the link is shown, and below roughly 75 characters links can be wider than `width`.
+- `width` sets the maximum line width: 30 to 300, default 120. When the table does not fit, the products column narrows (down to 20 characters), then columns are dropped in this order: order, ETA, products, updated, shop. Status always stays.
 - The token goes in the `Authorization` header, not the URL, so it does not end up in access logs. A wrong or missing token returns 401.
 - Responses are sent with `Cache-Control: no-store` and without an ETag.
 
@@ -95,6 +97,12 @@ Every new email goes to the model with a JSON schema. The model returns whether 
 - Statuses: `ordered`, `shipped`, `out_for_delivery`, `delivered`, `delayed`, `cancelled`, `returned`.
 - If Ollama fails, the email is not stored and is retried 30 seconds later, so no order is missed.
 
+### Re-parsing after changes
+
+Each email's model result is stored in `email_extractions` with a version hash of everything that affects the output: model, model options, system prompt, JSON schema, and the code that turns an email into model input (`htmlToText`, `userMessage`). When that hash changes, for example after editing the prompt, every stored email is parsed again on the next startup or sync, oldest first.
+
+Orders are then rebuilt from the stored results, so changes to the merge logic also apply to existing orders. On startup the orders are always rebuilt. If Ollama fails halfway, the existing orders are left untouched and the remaining emails are retried on the next sync. On CPU, re-parsing takes 30 to 120 seconds per email.
+
 ## Data
 
 Everything lives in `data/gmail-sync.db` (SQLite):
@@ -102,7 +110,8 @@ Everything lives in `data/gmail-sync.db` (SQLite):
 | Table | Contents |
 |---|---|
 | `emails` | Every stored email, including text and HTML bodies |
-| `orders` | One row per order with its latest status and products |
+| `email_extractions` | The model result per email, with the extraction version it was made with |
+| `orders` | One row per order with its latest status and products, rebuilt from `email_extractions` |
 | `order_events` | One row per email that changed an order |
 | `logs` | All log output (also printed to stdout) |
 | `kv` | OAuth refresh token, sync position, last sync time, watch expiry |
