@@ -87,6 +87,21 @@ The table lists all open orders plus orders finished (delivered, cancelled, retu
 - The token goes in the `Authorization` header, not the URL, so it does not end up in access logs. A wrong or missing token returns 401.
 - Responses are sent with `Cache-Control: no-store` and without an ETag.
 
+## Backfill older emails
+
+By default only mail arriving after the first run is stored. To fetch and parse the inbox emails of the last month:
+
+```sh
+curl -s -X POST -H "Authorization: Bearer $DASHBOARD_TOKEN" \
+  "https://joppekoers.nl/proxy/gmail-sync/backfill?days=30"
+```
+
+- `days` defaults to 30 and is clamped to 1 to 365. Only INBOX emails are fetched, and emails already stored are skipped.
+- It returns `202` straight away with the number of new emails and parses them in the background, oldest first. The dashboard's first line shows the progress, for example `OK · synced 2m ago · backfill 3/37`.
+- A second request while a backfill runs returns `409`.
+- If it stops halfway, for example because Ollama is down, run the same request again; it continues with the emails that are not stored yet.
+- On CPU each email takes 30 to 120 seconds, so a month of mail can take hours.
+
 ## Order tracking
 
 Every new email goes to the model with a JSON schema. The model returns whether it is an order email, plus shop, order number, status, products (name, SKU, quantity), carrier, tracking number, tracking URL and expected delivery date.

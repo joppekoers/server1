@@ -92,7 +92,8 @@ async function authorizeInteractively() {
 }
 
 await migrateLegacyJson();
-startDashboard(requireEnv("DASHBOARD_TOKEN"));
+const backfillProgress = { running: false, done: 0, total: 0 };
+startDashboard(requireEnv("DASHBOARD_TOKEN"), { start: startBackfill, progress: backfillProgress });
 const refreshToken = getKv("refreshToken") ?? (await authorizeInteractively());
 
 let accessToken = "";
@@ -162,6 +163,54 @@ async function saveMessage(id: string) {
 
   await processEmail(email);
   console.log(`Saved ${id}: ${email.subject}`);
+}
+
+async function listRecentInboxMessageIds(days: number) {
+  const ids: string[] = [];
+  let pageToken: string | undefined;
+  do {
+    const params = new URLSearchParams({
+      q: `newer_than:${days}d`,
+      labelIds: "INBOX",
+      maxResults: "500",
+      ...(pageToken && { pageToken }),
+    });
+    const page = await api<{ messages?: { id: string }[]; nextPageToken?: string }>(`${GMAIL}/messages?${params}`);
+    ids.push(...(page.messages ?? []).map((message) => message.id));
+    pageToken = page.nextPageToken;
+  } while (pageToken);
+  return ids;
+}
+
+async function startBackfill(days: number) {
+  if (backfillProgress.running) return null;
+  backfillProgress.running = true;
+  let ids: string[];
+  try {
+    // Gmail lists newest first; processing oldest first lets each order end with its latest status.
+    ids = (await listRecentInboxMessageIds(days)).filter((id) => !emailExists(id)).reverse();
+  } catch (error) {
+    backfillProgress.running = false;
+    throw error;
+  }
+  Object.assign(backfillProgress, { done: 0, total: ids.length });
+  console.log(`Backfill of the last ${days} days: ${ids.length} new emails`);
+
+  void (async () => {
+    try {
+      for (const id of ids) {
+        await saveMessage(id);
+        backfillProgress.done++;
+      }
+      await reparseStaleEmails({ rebuild: true });
+      console.log(`Backfill finished: ${ids.length} emails parsed`);
+    } catch (error) {
+      console.error(`Backfill stopped after ${backfillProgress.done} of ${ids.length} emails:`, error);
+    } finally {
+      backfillProgress.running = false;
+    }
+  })();
+  return ids.length;
 }
 
 async function syncHistory(state: State) {
