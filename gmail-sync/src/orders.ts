@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { asc, eq, isNull, ne, or } from "drizzle-orm";
 import { db, insertEmail, type StoredEmail } from "./db";
+import { attempt, HttpError, parseJson, toError } from "./errors";
 import {
   emailExtractions,
   emails,
@@ -17,6 +18,7 @@ const MODEL = process.env.OLLAMA_MODEL ?? "qwen3:8b";
 const KEEP_ALIVE = process.env.OLLAMA_KEEP_ALIVE ?? "1m";
 const MAX_BODY_CHARS = 8000;
 const MODEL_OPTIONS = { temperature: 0 };
+const NOT_AN_ORDER = /"isOrderEmail"\s*:\s*false/;
 
 export interface Order {
   id?: number;
@@ -76,12 +78,15 @@ Copy order numbers, tracking numbers and URLs exactly as written. Use null for a
 
 export async function ensureModel() {
   console.log(`Pulling ${MODEL} (no-op when already present)`);
-  const res = await fetch(`${OLLAMA_URL}/api/pull`, {
-    timeout: false,
-    method: "POST",
-    body: JSON.stringify({ model: MODEL, stream: false }),
-  });
-  if (!res.ok) throw new Error(`Ollama pull ${res.status}: ${await res.text()}`);
+  const res = await attempt(
+    fetch(`${OLLAMA_URL}/api/pull`, {
+      timeout: false,
+      method: "POST",
+      body: JSON.stringify({ model: MODEL, stream: false }),
+    }),
+  );
+  if (res instanceof Error) return res;
+  if (!res.ok) return new HttpError(`Ollama pull ${res.status}: ${await attempt(res.text())}`, res.status);
 }
 
 function htmlToText(html: string) {
@@ -114,41 +119,64 @@ export const EXTRACTION_VERSION = createHash("sha256")
   .digest("hex")
   .slice(0, 16);
 
-async function extract(email: StoredEmail): Promise<Extraction | null> {
-  const res = await fetch(`${OLLAMA_URL}/api/chat`, {
-    timeout: false,
-    method: "POST",
-    body: JSON.stringify({
-      model: MODEL,
-      stream: true,
-      think: false,
-      keep_alive: KEEP_ALIVE,
-      format: EXTRACTION_SCHEMA,
-      options: MODEL_OPTIONS,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userMessage(email) },
-      ],
-    }),
-  });
-  if (!res.ok || !res.body) throw new Error(`Ollama ${res.status}: ${await res.text()}`);
-
+async function readChatStream(body: ReadableStream<Uint8Array>): Promise<string | Error> {
   let content = "";
   let buffered = "";
   const decoder = new TextDecoder();
-  for await (const chunk of res.body) {
-    buffered += decoder.decode(chunk, { stream: true });
-    const lines = buffered.split("\n");
-    buffered = lines.pop()!;
-    for (const line of lines.filter(Boolean)) {
-      content += (JSON.parse(line) as { message?: { content: string } }).message?.content ?? "";
+  const append = (line: string) => {
+    const chunk = parseJson<{ message?: { content: string } }>(line);
+    if (chunk instanceof Error) return chunk;
+    content += chunk.message?.content ?? "";
+  };
+
+  try {
+    for await (const bytes of body) {
+      buffered += decoder.decode(bytes, { stream: true });
+      const lines = buffered.split("\n");
+      buffered = lines.pop()!;
+      for (const line of lines.filter(Boolean)) {
+        const appended = append(line);
+        if (appended instanceof Error) return appended;
+      }
+      // isOrderEmail is the first schema property, so on "false" leaving the loop cancels the stream and Ollama stops generating.
+      if (NOT_AN_ORDER.test(content)) return content;
     }
-    // isOrderEmail is the first schema property, so on "false" leaving the loop cancels the stream and Ollama stops generating.
-    if (/"isOrderEmail"\s*:\s*false/.test(content)) return null;
+  } catch (error) {
+    return toError(error);
   }
-  if (buffered.trim()) content += (JSON.parse(buffered) as { message?: { content: string } }).message?.content ?? "";
-  if (/"isOrderEmail"\s*:\s*false/.test(content)) return null;
-  return JSON.parse(content);
+  if (buffered.trim()) {
+    const appended = append(buffered);
+    if (appended instanceof Error) return appended;
+  }
+  return content;
+}
+
+async function extract(email: StoredEmail): Promise<Extraction | null | Error> {
+  const res = await attempt(
+    fetch(`${OLLAMA_URL}/api/chat`, {
+      timeout: false,
+      method: "POST",
+      body: JSON.stringify({
+        model: MODEL,
+        stream: true,
+        think: false,
+        keep_alive: KEEP_ALIVE,
+        format: EXTRACTION_SCHEMA,
+        options: MODEL_OPTIONS,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userMessage(email) },
+        ],
+      }),
+    }),
+  );
+  if (res instanceof Error) return res;
+  if (!res.ok || !res.body) return new HttpError(`Ollama ${res.status}: ${await attempt(res.text())}`, res.status);
+
+  const content = await readChatStream(res.body);
+  if (content instanceof Error) return content;
+  if (NOT_AN_ORDER.test(content)) return null;
+  return parseJson<Extraction>(content);
 }
 
 export const toOrderItem = (item: OrderItem | string): OrderItem =>
@@ -229,6 +257,7 @@ function applyExtraction(email: EmailRef, extraction: Extraction | null) {
 
 export async function processEmail(email: StoredEmail) {
   const extraction = await extract(email);
+  if (extraction instanceof Error) return extraction;
   const order = db.transaction(() => {
     insertEmail(email);
     saveExtraction(email.id, extraction);
@@ -271,28 +300,23 @@ export async function reparseStaleEmails({ rebuild = false } = {}) {
   }
 
   console.log(`Re-parsing ${stale.length} emails for extraction version ${EXTRACTION_VERSION}`);
-  let reparsed = 0;
-  for (const { email } of stale) {
-    try {
-      const extraction = await extract({
-        ...email,
-        from: email.fromAddress ?? undefined,
-        to: email.toAddress ?? undefined,
-        cc: email.cc ?? undefined,
-        subject: email.subject ?? undefined,
-        snippet: email.snippet ?? "",
-      });
-      saveExtraction(email.id, extraction);
-      reparsed++;
-    } catch (error) {
-      console.error(`Re-parsing ${email.id} failed, retrying on the next sync:`, error);
-      break;
+  for (const [index, { email }] of stale.entries()) {
+    const extraction = await extract({
+      ...email,
+      from: email.fromAddress ?? undefined,
+      to: email.toAddress ?? undefined,
+      cc: email.cc ?? undefined,
+      subject: email.subject ?? undefined,
+      snippet: email.snippet ?? "",
+    });
+    if (extraction instanceof Error) {
+      return new Error(
+        `Re-parsing stopped at ${index} of ${stale.length} emails, orders are rebuilt once all are done: ${extraction.message}`,
+        { cause: extraction },
+      );
     }
-  }
-  if (reparsed < stale.length) {
-    console.warn(`Re-parsed ${reparsed} of ${stale.length} emails, orders are rebuilt once all are done`);
-    return;
+    saveExtraction(email.id, extraction);
   }
   rebuildOrders();
-  console.log(`Re-parsed ${reparsed} emails and rebuilt orders`);
+  console.log(`Re-parsed ${stale.length} emails and rebuilt orders`);
 }

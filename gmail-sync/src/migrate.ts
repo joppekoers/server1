@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, renameSync } from "fs";
 import { basename, join } from "path";
 import { db, insertEmail, setKv, type StoredEmail } from "./db";
+import { attempt } from "./errors";
 import { logs } from "./schema";
 import { saveOrder, saveOrderEvent, toOrderItem, type Order, type OrderEvent } from "./orders";
 
@@ -23,33 +24,41 @@ function parseLegacyLog(content: string) {
   return entries;
 }
 
-const readJson = async <T>(path: string): Promise<T | null> => (existsSync(path) ? Bun.file(path).json() : null);
+type LegacyOrder = Omit<Order, "items"> & { items: string[]; history: OrderEvent[] };
+
+const readFileJson = <T>(path: string): Promise<T | Error> => attempt(Bun.file(path).json() as Promise<T>);
+
+async function readOptionalJson<T>(path: string, fallback: T): Promise<T | Error> {
+  return existsSync(path) ? readFileJson<T>(path) : fallback;
+}
 
 export async function migrateLegacyJson() {
   const sources = [EMAILS_DIR, ORDERS_FILE, STATE_FILE, TOKEN_FILE, LOG_FILE].filter((path) => existsSync(path));
   if (sources.length === 0) return;
 
-  const emails = existsSync(EMAILS_DIR)
-    ? await Promise.all(
-        readdirSync(EMAILS_DIR)
-          .filter((name) => name.endsWith(".json"))
-          .map((name) => Bun.file(join(EMAILS_DIR, name)).json() as Promise<StoredEmail>),
-      )
-    : [];
-  const orders = (await readJson<(Omit<Order, "items"> & { items: string[]; history: OrderEvent[] })[]>(ORDERS_FILE)) ?? [];
-  const state = await readJson<{ historyId?: string; watchExpiration?: number }>(STATE_FILE);
-  const token = await readJson<{ refresh_token?: string }>(TOKEN_FILE);
-  const logEntries = existsSync(LOG_FILE) ? parseLegacyLog(await Bun.file(LOG_FILE).text()) : [];
+  const emailFiles = existsSync(EMAILS_DIR) ? readdirSync(EMAILS_DIR).filter((name) => name.endsWith(".json")) : [];
+  const emails = await Promise.all(emailFiles.map((name) => readFileJson<StoredEmail>(join(EMAILS_DIR, name))));
+  const brokenEmail = emails.find((email) => email instanceof Error);
+  if (brokenEmail) return brokenEmail;
+  const orders = await readOptionalJson<LegacyOrder[]>(ORDERS_FILE, []);
+  if (orders instanceof Error) return orders;
+  const state = await readOptionalJson<{ historyId?: string; watchExpiration?: number }>(STATE_FILE, {});
+  if (state instanceof Error) return state;
+  const token = await readOptionalJson<{ refresh_token?: string }>(TOKEN_FILE, {});
+  if (token instanceof Error) return token;
+  const logText = existsSync(LOG_FILE) ? await attempt(Bun.file(LOG_FILE).text()) : "";
+  if (logText instanceof Error) return logText;
+  const logEntries = parseLegacyLog(logText);
 
   db.transaction(() => {
-    emails.forEach(insertEmail);
+    for (const email of emails) if (!(email instanceof Error)) insertEmail(email);
     for (const { history, items, ...order } of orders) {
       const orderId = saveOrder({ ...order, items: items.map(toOrderItem) });
       history.forEach((event) => saveOrderEvent(orderId, event));
     }
-    if (state?.historyId) setKv("historyId", state.historyId);
-    if (state?.watchExpiration) setKv("watchExpiration", String(state.watchExpiration));
-    if (token?.refresh_token) setKv("refreshToken", token.refresh_token);
+    if (state.historyId) setKv("historyId", state.historyId);
+    if (state.watchExpiration) setKv("watchExpiration", String(state.watchExpiration));
+    if (token.refresh_token) setKv("refreshToken", token.refresh_token);
     for (const entry of logEntries) db.insert(logs).values(entry).run();
   });
 

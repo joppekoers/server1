@@ -1,13 +1,14 @@
 import "./log";
 import { startDashboard } from "./dashboard";
 import { emailExists, getKv, setKv } from "./db";
+import { attempt, exitOnError, HttpError, readJson } from "./errors";
 import { migrateLegacyJson } from "./migrate";
 import { ensureModel, processEmail, reparseStaleEmails } from "./orders";
 
-const CLIENT_ID = requireEnv("GOOGLE_CLIENT_ID");
-const CLIENT_SECRET = requireEnv("GOOGLE_CLIENT_SECRET");
-const TOPIC = requireEnv("PUBSUB_TOPIC");
-const SUBSCRIPTION = requireEnv("PUBSUB_SUBSCRIPTION");
+const CLIENT_ID = exitOnError(requireEnv("GOOGLE_CLIENT_ID"));
+const CLIENT_SECRET = exitOnError(requireEnv("GOOGLE_CLIENT_SECRET"));
+const TOPIC = exitOnError(requireEnv("PUBSUB_TOPIC"));
+const SUBSCRIPTION = exitOnError(requireEnv("PUBSUB_SUBSCRIPTION"));
 const OAUTH_PORT = Number(process.env.OAUTH_PORT ?? 8085);
 
 const GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me";
@@ -15,6 +16,7 @@ const PUBSUB = "https://pubsub.googleapis.com/v1";
 const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/pubsub"];
 const BACKSTOP_SYNC_MS = 10 * 60_000;
 const WATCH_RENEW_MARGIN_MS = 24 * 60 * 60_000;
+const RETRY_DELAY_MS = 30_000;
 
 interface State {
   historyId?: string;
@@ -38,10 +40,14 @@ interface GmailMessage {
   payload: MessagePart;
 }
 
+interface TokenResponse {
+  access_token: string;
+  expires_in: number;
+  refresh_token?: string;
+}
+
 function requireEnv(name: string) {
-  const value = process.env[name];
-  if (!value) throw new Error(`Missing env var ${name}`);
-  return value;
+  return process.env[name] || new Error(`Missing env var ${name}`);
 }
 
 function saveState(state: State) {
@@ -50,12 +56,15 @@ function saveState(state: State) {
 }
 
 async function exchangeToken(params: Record<string, string>) {
-  const res = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    body: new URLSearchParams({ client_id: CLIENT_ID, client_secret: CLIENT_SECRET, ...params }),
-  });
-  if (!res.ok) throw new Error(`Token request failed: ${res.status} ${await res.text()}`);
-  return res.json() as Promise<{ access_token: string; expires_in: number; refresh_token?: string }>;
+  const res = await attempt(
+    fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      body: new URLSearchParams({ client_id: CLIENT_ID, client_secret: CLIENT_SECRET, ...params }),
+    }),
+  );
+  if (res instanceof Error) return res;
+  if (!res.ok) return new HttpError(`Token request failed: ${res.status} ${await attempt(res.text())}`, res.status);
+  return readJson<TokenResponse>(res);
 }
 
 async function authorizeInteractively() {
@@ -86,15 +95,16 @@ async function authorizeInteractively() {
   server.stop();
 
   const token = await exchangeToken({ code, redirect_uri: redirectUri, grant_type: "authorization_code" });
-  if (!token.refresh_token) throw new Error("No refresh token returned");
+  if (token instanceof Error) return token;
+  if (!token.refresh_token) return new Error("No refresh token returned");
   setKv("refreshToken", token.refresh_token);
   return token.refresh_token;
 }
 
-await migrateLegacyJson();
+exitOnError(await migrateLegacyJson());
 const backfillProgress = { running: false, done: 0, total: 0 };
-startDashboard(requireEnv("DASHBOARD_TOKEN"), { start: startBackfill, progress: backfillProgress });
-const refreshToken = getKv("refreshToken") ?? (await authorizeInteractively());
+startDashboard(exitOnError(requireEnv("DASHBOARD_TOKEN")), { start: startBackfill, progress: backfillProgress });
+const refreshToken = getKv("refreshToken") ?? exitOnError(await authorizeInteractively());
 
 let accessToken = "";
 let accessTokenExpiresAt = 0;
@@ -102,18 +112,21 @@ let accessTokenExpiresAt = 0;
 async function getAccessToken() {
   if (Date.now() < accessTokenExpiresAt - 60_000) return accessToken;
   const token = await exchangeToken({ refresh_token: refreshToken, grant_type: "refresh_token" });
+  if (token instanceof Error) return token;
   accessToken = token.access_token;
   accessTokenExpiresAt = Date.now() + token.expires_in * 1000;
   return accessToken;
 }
 
-async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(url, {
-    ...init,
-    headers: { Authorization: `Bearer ${await getAccessToken()}`, "Content-Type": "application/json" },
-  });
-  if (!res.ok) throw Object.assign(new Error(`${res.status} ${url}: ${await res.text()}`), { status: res.status });
-  return res.json() as Promise<T>;
+async function api<T>(url: string, init: RequestInit = {}): Promise<T | Error> {
+  const token = await getAccessToken();
+  if (token instanceof Error) return token;
+  const res = await attempt(
+    fetch(url, { ...init, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }),
+  );
+  if (res instanceof Error) return res;
+  if (!res.ok) return new HttpError(`${res.status} ${url}: ${await attempt(res.text())}`, res.status);
+  return readJson<T>(res);
 }
 
 async function ensureWatch(state: State) {
@@ -122,6 +135,7 @@ async function ensureWatch(state: State) {
     method: "POST",
     body: JSON.stringify({ topicName: TOPIC, labelIds: ["INBOX"], labelFilterBehavior: "include" }),
   });
+  if (watch instanceof Error) return watch;
   state.watchExpiration = Number(watch.expiration);
   state.historyId ??= watch.historyId;
   saveState(state);
@@ -142,6 +156,7 @@ async function saveMessage(id: string) {
   if (emailExists(id)) return;
 
   const message = await api<GmailMessage>(`${GMAIL}/messages/${id}?format=full`);
+  if (message instanceof Error) return message;
   const header = (name: string) =>
     message.payload.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value;
   const bodies = decodeBodies(message.payload, { text: [], html: [], attachments: [] });
@@ -161,7 +176,8 @@ async function saveMessage(id: string) {
     headers: message.payload.headers,
   };
 
-  await processEmail(email);
+  const processed = await processEmail(email);
+  if (processed instanceof Error) return processed;
   console.log(`Saved ${id}: ${email.subject}`);
 }
 
@@ -176,113 +192,133 @@ async function listRecentInboxMessageIds(days: number) {
       ...(pageToken && { pageToken }),
     });
     const page = await api<{ messages?: { id: string }[]; nextPageToken?: string }>(`${GMAIL}/messages?${params}`);
+    if (page instanceof Error) return page;
     ids.push(...(page.messages ?? []).map((message) => message.id));
     pageToken = page.nextPageToken;
   } while (pageToken);
   return ids;
 }
 
+async function runBackfill(ids: string[]) {
+  for (const id of ids) {
+    const saved = await saveMessage(id);
+    if (saved instanceof Error) return saved;
+    backfillProgress.done++;
+  }
+  return reparseStaleEmails({ rebuild: true });
+}
+
 async function startBackfill(days: number) {
   if (backfillProgress.running) return null;
-  backfillProgress.running = true;
-  let ids: string[];
-  try {
-    // Gmail lists newest first; processing oldest first lets each order end with its latest status.
-    ids = (await listRecentInboxMessageIds(days)).filter((id) => !emailExists(id)).reverse();
-  } catch (error) {
+  Object.assign(backfillProgress, { running: true, done: 0, total: 0 });
+  const listed = await listRecentInboxMessageIds(days);
+  if (listed instanceof Error) {
     backfillProgress.running = false;
-    throw error;
+    return listed;
   }
-  Object.assign(backfillProgress, { done: 0, total: ids.length });
+  // Gmail lists newest first; processing oldest first lets each order end with its latest status.
+  const ids = listed.filter((id) => !emailExists(id)).reverse();
+  backfillProgress.total = ids.length;
   console.log(`Backfill of the last ${days} days: ${ids.length} new emails`);
 
-  void (async () => {
-    try {
-      for (const id of ids) {
-        await saveMessage(id);
-        backfillProgress.done++;
-      }
-      await reparseStaleEmails({ rebuild: true });
-      console.log(`Backfill finished: ${ids.length} emails parsed`);
-    } catch (error) {
-      console.error(`Backfill stopped after ${backfillProgress.done} of ${ids.length} emails:`, error);
-    } finally {
-      backfillProgress.running = false;
-    }
-  })();
+  void runBackfill(ids).then((result) => {
+    backfillProgress.running = false;
+    if (result instanceof Error) console.error(`Backfill stopped after ${backfillProgress.done} of ${ids.length} emails:`, result);
+    else console.log(`Backfill finished: ${ids.length} emails parsed`);
+  });
   return ids.length;
 }
+
+type HistoryPage = {
+  history?: { messagesAdded?: { message: { id: string } }[] }[];
+  historyId: string;
+  nextPageToken?: string;
+};
 
 async function syncHistory(state: State) {
   let pageToken: string | undefined;
   let latestHistoryId = state.historyId;
-  try {
-    do {
-      const params = new URLSearchParams({
-        startHistoryId: state.historyId!,
-        historyTypes: "messageAdded",
-        labelId: "INBOX",
-        ...(pageToken && { pageToken }),
-      });
-      const page = await api<{
-        history?: { messagesAdded?: { message: { id: string } }[] }[];
-        historyId: string;
-        nextPageToken?: string;
-      }>(`${GMAIL}/history?${params}`);
+  do {
+    const params = new URLSearchParams({
+      startHistoryId: state.historyId!,
+      historyTypes: "messageAdded",
+      labelId: "INBOX",
+      ...(pageToken && { pageToken }),
+    });
+    const page = await api<HistoryPage>(`${GMAIL}/history?${params}`);
 
-      for (const entry of page.history ?? []) {
-        for (const { message } of entry.messagesAdded ?? []) await saveMessage(message.id);
-      }
-      latestHistoryId = page.historyId;
-      pageToken = page.nextPageToken;
-    } while (pageToken);
-  } catch (error) {
     // Gmail returns 404 once a startHistoryId is too old to replay; restart from the current mailbox state.
-    if ((error as { status?: number }).status !== 404) throw error;
-    latestHistoryId = (await api<{ historyId: string }>(`${GMAIL}/profile`)).historyId;
-    console.warn("History expired, resuming from current mailbox state");
-  }
+    if (page instanceof HttpError && page.status === 404) {
+      const profile = await api<{ historyId: string }>(`${GMAIL}/profile`);
+      if (profile instanceof Error) return profile;
+      latestHistoryId = profile.historyId;
+      console.warn("History expired, resuming from current mailbox state");
+      break;
+    }
+    if (page instanceof Error) return page;
+
+    for (const entry of page.history ?? []) {
+      for (const { message } of entry.messagesAdded ?? []) {
+        const saved = await saveMessage(message.id);
+        if (saved instanceof Error) return saved;
+      }
+    }
+    latestHistoryId = page.historyId;
+    pageToken = page.nextPageToken;
+  } while (pageToken);
+
   state.historyId = latestHistoryId;
   saveState(state);
   setKv("lastSyncAt", new Date().toISOString());
 }
 
 async function pullNotifications() {
-  const { receivedMessages = [] } = await api<{ receivedMessages?: { ackId: string }[] }>(
-    `${PUBSUB}/${SUBSCRIPTION}:pull`,
-    { method: "POST", body: JSON.stringify({ maxMessages: 100 }) },
-  );
+  const pulled = await api<{ receivedMessages?: { ackId: string }[] }>(`${PUBSUB}/${SUBSCRIPTION}:pull`, {
+    method: "POST",
+    body: JSON.stringify({ maxMessages: 100 }),
+  });
+  if (pulled instanceof Error) return pulled;
+  const { receivedMessages = [] } = pulled;
   if (receivedMessages.length === 0) return false;
-  await api(`${PUBSUB}/${SUBSCRIPTION}:acknowledge`, {
+  const acked = await api(`${PUBSUB}/${SUBSCRIPTION}:acknowledge`, {
     method: "POST",
     body: JSON.stringify({ ackIds: receivedMessages.map((m) => m.ackId) }),
   });
-  return true;
+  return acked instanceof Error ? acked : true;
 }
 
-await ensureModel();
-setKv("emailAddress", (await api<{ emailAddress: string }>(`${GMAIL}/profile`)).emailAddress);
+exitOnError(await ensureModel());
+setKv("emailAddress", exitOnError(await api<{ emailAddress: string }>(`${GMAIL}/profile`)).emailAddress);
 const state: State = {
   historyId: getKv("historyId"),
   watchExpiration: Number(getKv("watchExpiration") ?? 0) || undefined,
 };
-await ensureWatch(state);
-await syncHistory(state);
-await reparseStaleEmails({ rebuild: true });
+exitOnError(await ensureWatch(state));
+exitOnError(await syncHistory(state));
+const startupReparse = await reparseStaleEmails({ rebuild: true });
+if (startupReparse instanceof Error) console.error(startupReparse);
+
+let lastSync = Date.now();
+
+async function tick() {
+  const notified = await pullNotifications();
+  if (notified instanceof Error) return notified;
+  if (!notified && Date.now() - lastSync <= BACKSTOP_SYNC_MS) return;
+
+  const watched = await ensureWatch(state);
+  if (watched instanceof Error) return watched;
+  const synced = await syncHistory(state);
+  if (synced instanceof Error) return synced;
+  const reparsed = await reparseStaleEmails();
+  if (reparsed instanceof Error) return reparsed;
+  lastSync = Date.now();
+}
 
 console.log("Waiting for messages");
-let lastSync = Date.now();
 while (true) {
-  try {
-    const notified = await pullNotifications();
-    if (notified || Date.now() - lastSync > BACKSTOP_SYNC_MS) {
-      await ensureWatch(state);
-      await syncHistory(state);
-      await reparseStaleEmails();
-      lastSync = Date.now();
-    }
-  } catch (error) {
-    console.error(error);
-    await Bun.sleep(30_000);
+  const result = await tick();
+  if (result instanceof Error) {
+    console.error(result);
+    await Bun.sleep(RETRY_DELAY_MS);
   }
 }

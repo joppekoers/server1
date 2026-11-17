@@ -2,6 +2,7 @@ import { timingSafeEqual } from "crypto";
 import { and, count, desc, eq, gte, inArray, isNull, notInArray, or } from "drizzle-orm";
 import express from "express";
 import { db, getKv } from "./db";
+import { exitOnError } from "./errors";
 import { logs, orderEvents, orders, type OrderStatus } from "./schema";
 
 const PORT = Number(process.env.DASHBOARD_PORT ?? 8086);
@@ -18,7 +19,7 @@ const DEFAULT_BACKFILL_DAYS = 30;
 const MAX_BACKFILL_DAYS = 365;
 
 export interface Backfill {
-  start: (days: number) => Promise<number | null>;
+  start: (days: number) => Promise<number | null | Error>;
   progress: { running: boolean; done: number; total: number };
 }
 
@@ -236,6 +237,11 @@ export function startDashboard(token: string, backfill: Backfill) {
   app.post("/backfill", async (req, res) => {
     const days = clampedNumber(req.query.days, DEFAULT_BACKFILL_DAYS, 1, MAX_BACKFILL_DAYS);
     const queued = await backfill.start(days);
+    if (queued instanceof Error) {
+      console.error("Backfill could not start:", queued);
+      res.status(502).send(`Backfill could not start: ${queued.message}\n`);
+      return;
+    }
     if (queued === null) {
       const { done, total } = backfill.progress;
       res.status(409).send(`Backfill already running (${done}/${total})\n`);
@@ -250,7 +256,7 @@ export function startDashboard(token: string, backfill: Backfill) {
   });
 
   app.listen(PORT, (error) => {
-    if (error) throw error;
+    if (error) exitOnError(error);
     console.log(`Dashboard listening on port ${PORT}`);
   });
 }
