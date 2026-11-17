@@ -112,7 +112,7 @@ sqlite3 data/gmail-sync.db "SELECT merchant, order_number, status, tracking_url 
 sqlite3 data/gmail-sync.db "SELECT at, level, message FROM logs ORDER BY id DESC LIMIT 20"
 ```
 
-Queries use Drizzle; the schema is in `schema.ts`. After changing it, run `bun run db:generate` to create a migration in `drizzle/`. Migrations are applied automatically on startup. Check types with `bun run typecheck`.
+Queries use Drizzle; the schema is in `src/schema.ts`. After changing it, run `bun run db:generate` to create a migration in `drizzle/`. Migrations are applied automatically on startup. Check types with `bun run typecheck`.
 
 Data from older versions (JSON files and `app.log` in `data/`) is imported into SQLite on startup and the old files are moved to `data/legacy-json/`.
 

@@ -14,7 +14,7 @@ sqlite.run("PRAGMA journal_mode = WAL");
 sqlite.run("PRAGMA foreign_keys = ON");
 
 export const db = drizzle(sqlite, { schema });
-migrate(db, { migrationsFolder: join(import.meta.dir, "drizzle") });
+migrate(db, { migrationsFolder: join(import.meta.dir, "..", "drizzle") });
 
 export interface StoredEmail {
   id: string;

@@ -5,7 +5,7 @@ WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --production --frozen-lockfile
 
-COPY *.ts ./
+COPY src ./src
 COPY drizzle ./drizzle
 
-ENTRYPOINT ["bun", "run", "sync.ts"]
+ENTRYPOINT ["bun", "run", "src/sync.ts"]

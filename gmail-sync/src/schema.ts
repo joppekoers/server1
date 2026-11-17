@@ -9,6 +9,18 @@ export interface OrderItem {
   quantity: number | null;
 }
 
+export interface Extraction {
+  isOrderEmail: boolean;
+  merchant: string | null;
+  orderNumber: string | null;
+  status: OrderStatus | null;
+  items: OrderItem[];
+  carrier: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  estimatedDelivery: string | null;
+}
+
 export const kv = sqliteTable("kv", {
   key: text().primaryKey(),
   value: text().notNull(),
@@ -28,6 +40,15 @@ export const emails = sqliteTable("emails", {
   labelIds: text("label_ids", { mode: "json" }).$type<string[]>().notNull(),
   attachments: text({ mode: "json" }).$type<string[]>().notNull(),
   headers: text({ mode: "json" }).$type<{ name: string; value: string }[]>().notNull(),
+});
+
+export const emailExtractions = sqliteTable("email_extractions", {
+  emailId: text("email_id")
+    .primaryKey()
+    .references(() => emails.id),
+  version: text().notNull(),
+  result: text({ mode: "json" }).$type<Extraction | null>(),
+  extractedAt: text("extracted_at").notNull(),
 });
 
 export const orders = sqliteTable(

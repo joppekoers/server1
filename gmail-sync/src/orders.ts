@@ -1,23 +1,22 @@
-import { eq, or } from "drizzle-orm";
+import { createHash } from "crypto";
+import { asc, eq, isNull, ne, or } from "drizzle-orm";
 import { db, insertEmail, type StoredEmail } from "./db";
-import { ORDER_STATUSES, orderEvents, orders, type OrderItem, type OrderStatus } from "./schema";
+import {
+  emailExtractions,
+  emails,
+  ORDER_STATUSES,
+  orderEvents,
+  orders,
+  type Extraction,
+  type OrderItem,
+  type OrderStatus,
+} from "./schema";
 
 const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://localhost:11434";
 const MODEL = process.env.OLLAMA_MODEL ?? "qwen3:8b";
 const KEEP_ALIVE = process.env.OLLAMA_KEEP_ALIVE ?? "1m";
 const MAX_BODY_CHARS = 8000;
-
-interface Extraction {
-  isOrderEmail: boolean;
-  merchant: string | null;
-  orderNumber: string | null;
-  status: OrderStatus | null;
-  items: OrderItem[];
-  carrier: string | null;
-  trackingNumber: string | null;
-  trackingUrl: string | null;
-  estimatedDelivery: string | null;
-}
+const MODEL_OPTIONS = { temperature: 0 };
 
 export interface Order {
   id?: number;
@@ -38,6 +37,8 @@ export interface OrderEvent {
   emailId: string;
   subject?: string;
 }
+
+type EmailRef = Pick<StoredEmail, "id" | "receivedAt" | "subject">;
 
 const nullableString = { type: ["string", "null"] };
 
@@ -70,7 +71,7 @@ const EXTRACTION_SCHEMA = {
 const SYSTEM_PROMPT = `You classify emails about online orders and parcel deliveries.
 Set isOrderEmail to true only for transactional emails about a specific order or shipment: order confirmations, shipping notifications, tracking codes, out-for-delivery, delivered, delay, cancellation or return notices. Newsletters, promotions, reviews requests and receipts for in-store purchases are false.
 status meanings: ordered = order placed/confirmed, shipped = handed to carrier or tracking code sent, out_for_delivery = arriving today, delivered, delayed, cancelled, returned.
-items lists every product in the order: name is the human-readable product name (e.g. "Oversized Cotton T-Shirt - Black, M"), sku is the article/product code if shown, quantity is the number ordered.
+items lists every product in the order. name is the product name as a shopper would say it (e.g. "Oversized Cotton T-Shirt - Black, M"), never an article number, SKU or code; if the email only shows codes, name is null. sku is the article/product code if shown. quantity is the number ordered.
 Copy order numbers, tracking numbers and URLs exactly as written. Use null for anything not stated. estimatedDelivery is an ISO date (YYYY-MM-DD) or null.`;
 
 export async function ensureModel() {
@@ -100,8 +101,20 @@ function htmlToText(html: string) {
     .trim();
 }
 
-async function extract(email: StoredEmail): Promise<Extraction | null> {
+function userMessage(email: StoredEmail) {
   const body = (email.text.trim() || htmlToText(email.html)).slice(0, MAX_BODY_CHARS);
+  return `From: ${email.from}\nSubject: ${email.subject}\nReceived: ${email.receivedAt}\n\n${body}`;
+}
+
+// Anything that can change the model output is hashed, so editing the prompt, schema or input formatting re-parses stored emails.
+export const EXTRACTION_VERSION = createHash("sha256")
+  .update(
+    JSON.stringify([MODEL, MODEL_OPTIONS, SYSTEM_PROMPT, EXTRACTION_SCHEMA, htmlToText.toString(), userMessage.toString()]),
+  )
+  .digest("hex")
+  .slice(0, 16);
+
+async function extract(email: StoredEmail): Promise<Extraction | null> {
   const res = await fetch(`${OLLAMA_URL}/api/chat`, {
     timeout: false,
     method: "POST",
@@ -111,10 +124,10 @@ async function extract(email: StoredEmail): Promise<Extraction | null> {
       think: false,
       keep_alive: KEEP_ALIVE,
       format: EXTRACTION_SCHEMA,
-      options: { temperature: 0 },
+      options: MODEL_OPTIONS,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: `From: ${email.from}\nSubject: ${email.subject}\nReceived: ${email.receivedAt}\n\n${body}` },
+        { role: "user", content: userMessage(email) },
       ],
     }),
   });
@@ -179,8 +192,16 @@ export function saveOrderEvent(orderId: number, event: OrderEvent) {
   db.insert(orderEvents).values({ orderId, ...event }).onConflictDoNothing().run();
 }
 
-function applyExtraction(email: StoredEmail, extraction: Extraction | null) {
-  if (!extraction?.isOrderEmail ||(!extraction.orderNumber && !extraction.trackingNumber)) return;
+function saveExtraction(emailId: string, result: Extraction | null) {
+  const values = { version: EXTRACTION_VERSION, result, extractedAt: new Date().toISOString() };
+  db.insert(emailExtractions)
+    .values({ emailId, ...values })
+    .onConflictDoUpdate({ target: emailExtractions.emailId, set: values })
+    .run();
+}
+
+function applyExtraction(email: EmailRef, extraction: Extraction | null) {
+  if (!extraction?.isOrderEmail || (!extraction.orderNumber && !extraction.trackingNumber)) return null;
 
   const order: Order = findOrder(extraction.orderNumber, extraction.trackingNumber) ?? {
     merchant: null, orderNumber: null, status: null, items: [], carrier: null,
@@ -203,13 +224,75 @@ function applyExtraction(email: StoredEmail, extraction: Extraction | null) {
 
   const orderId = saveOrder(order);
   saveOrderEvent(orderId, { status, at: email.receivedAt, emailId: email.id, subject: email.subject });
-  console.log(`Order ${order.merchant ?? "?"} ${order.orderNumber ?? order.trackingNumber}: ${order.status}`);
+  return order;
 }
 
 export async function processEmail(email: StoredEmail) {
   const extraction = await extract(email);
-  db.transaction(() => {
-    applyExtraction(email, extraction);
+  const order = db.transaction(() => {
     insertEmail(email);
+    saveExtraction(email.id, extraction);
+    return applyExtraction(email, extraction);
   });
+  if (order) console.log(`Order ${order.merchant ?? "?"} ${order.orderNumber ?? order.trackingNumber}: ${order.status}`);
+}
+
+export function rebuildOrders() {
+  const extracted = db
+    .select({
+      id: emails.id,
+      receivedAt: emails.receivedAt,
+      subject: emails.subject,
+      result: emailExtractions.result,
+    })
+    .from(emailExtractions)
+    .innerJoin(emails, eq(emails.id, emailExtractions.emailId))
+    .orderBy(asc(emails.receivedAt))
+    .all();
+
+  db.transaction(() => {
+    db.delete(orderEvents).run();
+    db.delete(orders).run();
+    for (const { result, subject, ...email } of extracted) applyExtraction({ ...email, subject: subject ?? undefined }, result);
+  });
+}
+
+export async function reparseStaleEmails({ rebuild = false } = {}) {
+  const stale = db
+    .select({ email: emails })
+    .from(emails)
+    .leftJoin(emailExtractions, eq(emails.id, emailExtractions.emailId))
+    .where(or(isNull(emailExtractions.version), ne(emailExtractions.version, EXTRACTION_VERSION)))
+    .orderBy(asc(emails.receivedAt))
+    .all();
+  if (stale.length === 0) {
+    if (rebuild) rebuildOrders();
+    return;
+  }
+
+  console.log(`Re-parsing ${stale.length} emails for extraction version ${EXTRACTION_VERSION}`);
+  let reparsed = 0;
+  for (const { email } of stale) {
+    try {
+      const extraction = await extract({
+        ...email,
+        from: email.fromAddress ?? undefined,
+        to: email.toAddress ?? undefined,
+        cc: email.cc ?? undefined,
+        subject: email.subject ?? undefined,
+        snippet: email.snippet ?? "",
+      });
+      saveExtraction(email.id, extraction);
+      reparsed++;
+    } catch (error) {
+      console.error(`Re-parsing ${email.id} failed, retrying on the next sync:`, error);
+      break;
+    }
+  }
+  if (reparsed < stale.length) {
+    console.warn(`Re-parsed ${reparsed} of ${stale.length} emails, orders are rebuilt once all are done`);
+    return;
+  }
+  rebuildOrders();
+  console.log(`Re-parsed ${reparsed} emails and rebuilt orders`);
 }

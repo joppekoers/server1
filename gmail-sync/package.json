@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun --watch sync.ts",
-    "start": "bun sync.ts",
+    "dev": "bun --watch src/sync.ts",
+    "start": "bun src/sync.ts",
     "db:generate": "drizzle-kit generate",
     "typecheck": "tsc"
   },

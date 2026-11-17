@@ -2,7 +2,7 @@ import "./log";
 import { startDashboard } from "./dashboard";
 import { emailExists, getKv, setKv } from "./db";
 import { migrateLegacyJson } from "./migrate";
-import { ensureModel, processEmail } from "./orders";
+import { ensureModel, processEmail, reparseStaleEmails } from "./orders";
 
 const CLIENT_ID = requireEnv("GOOGLE_CLIENT_ID");
 const CLIENT_SECRET = requireEnv("GOOGLE_CLIENT_SECRET");
@@ -218,6 +218,7 @@ const state: State = {
 };
 await ensureWatch(state);
 await syncHistory(state);
+await reparseStaleEmails({ rebuild: true });
 
 console.log("Waiting for messages");
 let lastSync = Date.now();
@@ -227,6 +228,7 @@ while (true) {
     if (notified || Date.now() - lastSync > BACKSTOP_SYNC_MS) {
       await ensureWatch(state);
       await syncHistory(state);
+      await reparseStaleEmails();
       lastSync = Date.now();
     }
   } catch (error) {
