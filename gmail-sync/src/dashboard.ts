@@ -104,7 +104,7 @@ function productLines(order: Order, width: number) {
 
 function emailLine(event: OrderEvent, now: number, width: number) {
   const subject = event.subject?.trim() ? `"${event.subject.trim()}"` : "(no subject)";
-  return fit(`  ${timeAgo(event.at, now).padEnd(8)} ${formatStatus(event.status).padEnd(16)} ${subject}`, width);
+  return fit(`  ${timeAgo(event.at, now).padStart(7)}  ${formatStatus(event.status).padEnd(16)} ${subject}`, width);
 }
 
 function renderOrder(order: Order, events: OrderEvent[], now: number, width: number) {
