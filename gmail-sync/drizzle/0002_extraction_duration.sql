@@ -1,0 +1,1 @@
+ALTER TABLE `email_extractions` ADD `duration_ms` integer;

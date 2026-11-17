@@ -49,6 +49,7 @@ export const emailExtractions = sqliteTable("email_extractions", {
   version: text().notNull(),
   result: text({ mode: "json" }).$type<Extraction | null>(),
   extractedAt: text("extracted_at").notNull(),
+  durationMs: integer("duration_ms"),
 });
 
 export const orders = sqliteTable(

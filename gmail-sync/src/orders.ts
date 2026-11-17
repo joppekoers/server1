@@ -179,6 +179,13 @@ async function extract(email: StoredEmail): Promise<Extraction | null | Error> {
   return parseJson<Extraction>(content);
 }
 
+async function timedExtract(email: StoredEmail) {
+  const started = performance.now();
+  const result = await extract(email);
+  if (result instanceof Error) return result;
+  return { result, durationMs: Math.round(performance.now() - started) };
+}
+
 export const toOrderItem = (item: OrderItem | string): OrderItem =>
   typeof item === "string" ? { name: item, sku: null, quantity: null } : item;
 
@@ -220,8 +227,8 @@ export function saveOrderEvent(orderId: number, event: OrderEvent) {
   db.insert(orderEvents).values({ orderId, ...event }).onConflictDoNothing().run();
 }
 
-function saveExtraction(emailId: string, result: Extraction | null) {
-  const values = { version: EXTRACTION_VERSION, result, extractedAt: new Date().toISOString() };
+function saveExtraction(emailId: string, result: Extraction | null, durationMs: number) {
+  const values = { version: EXTRACTION_VERSION, result, durationMs, extractedAt: new Date().toISOString() };
   db.insert(emailExtractions)
     .values({ emailId, ...values })
     .onConflictDoUpdate({ target: emailExtractions.emailId, set: values })
@@ -256,12 +263,12 @@ function applyExtraction(email: EmailRef, extraction: Extraction | null) {
 }
 
 export async function processEmail(email: StoredEmail) {
-  const extraction = await extract(email);
+  const extraction = await timedExtract(email);
   if (extraction instanceof Error) return extraction;
   const order = db.transaction(() => {
     insertEmail(email);
-    saveExtraction(email.id, extraction);
-    return applyExtraction(email, extraction);
+    saveExtraction(email.id, extraction.result, extraction.durationMs);
+    return applyExtraction(email, extraction.result);
   });
   if (order) console.log(`Order ${order.merchant ?? "?"} ${order.orderNumber ?? order.trackingNumber}: ${order.status}`);
 }
@@ -301,7 +308,7 @@ export async function reparseStaleEmails({ rebuild = false } = {}) {
 
   console.log(`Re-parsing ${stale.length} emails for extraction version ${EXTRACTION_VERSION}`);
   for (const [index, { email }] of stale.entries()) {
-    const extraction = await extract({
+    const extraction = await timedExtract({
       ...email,
       from: email.fromAddress ?? undefined,
       to: email.toAddress ?? undefined,
@@ -315,7 +322,7 @@ export async function reparseStaleEmails({ rebuild = false } = {}) {
         { cause: extraction },
       );
     }
-    saveExtraction(email.id, extraction);
+    saveExtraction(email.id, extraction.result, extraction.durationMs);
   }
   rebuildOrders();
   console.log(`Re-parsed ${stale.length} emails and rebuilt orders`);

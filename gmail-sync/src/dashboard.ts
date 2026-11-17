@@ -1,9 +1,9 @@
 import { timingSafeEqual } from "crypto";
-import { and, count, desc, eq, gte, inArray, isNull, notInArray, or } from "drizzle-orm";
+import { and, count, desc, eq, getTableColumns, gte, inArray, isNull, notInArray, or } from "drizzle-orm";
 import express from "express";
 import { db, getKv } from "./db";
 import { exitOnError } from "./errors";
-import { logs, orderEvents, orders, type OrderStatus } from "./schema";
+import { emailExtractions, logs, orderEvents, orders, type OrderStatus } from "./schema";
 
 const PORT = Number(process.env.DASHBOARD_PORT ?? 8086);
 const DEFAULT_WIDTH = 120;
@@ -131,10 +131,21 @@ function emailLink(emailId: string) {
   return `https://mail.google.com/mail/u/${getKv("emailAddress") ?? "0"}/#all/${emailId}`;
 }
 
+function formatDuration(ms: number | null) {
+  if (ms === null) return "-";
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 1) return "<1s";
+  const minutes = Math.floor(seconds / 60);
+  return minutes ? `${minutes}m${seconds % 60}s` : `${seconds}s`;
+}
+
+type EventRow = typeof orderEvents.$inferSelect & { durationMs: number | null };
+
 // Links are never shortened because a cut-off URL cannot be opened, so on very narrow widths they may exceed the width.
-function emailLinkLine(event: typeof orderEvents.$inferSelect, now: number, width: number) {
+function emailLinkLine(event: EventRow, now: number, width: number) {
   const link = emailLink(event.emailId);
-  const full = `${(event.status ?? "-").replaceAll("_", " ").padEnd(16)}  ${timeAgo(event.at, now).padEnd(8)}  ${link}`;
+  const status = (event.status ?? "-").replaceAll("_", " ").padEnd(16);
+  const full = `${status}  ${timeAgo(event.at, now).padEnd(8)}  ${formatDuration(event.durationMs).padStart(6)}  ${link}`;
   return [...full].length <= width ? full : link;
 }
 
@@ -184,8 +195,9 @@ function renderDashboard(width: number) {
 
   if (visibleOrders.length === 0) return `${status}\nNo orders yet\n`;
   const events = db
-    .select()
+    .select({ ...getTableColumns(orderEvents), durationMs: emailExtractions.durationMs })
     .from(orderEvents)
+    .leftJoin(emailExtractions, eq(emailExtractions.emailId, orderEvents.emailId))
     .where(
       inArray(
         orderEvents.orderId,
