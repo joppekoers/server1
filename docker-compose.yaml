@@ -178,3 +178,27 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  gmail-sync:
+    container_name: gmail-sync
+    build: ./gmail-sync
+    restart: unless-stopped
+    user: "1000:1000"
+    env_file:
+      - ./gmail-sync/.env
+    environment:
+      - DATA_DIR=/data
+      - OLLAMA_URL=http://ollama:11434
+    ports:
+      - 127.0.0.1:8085:8085
+    volumes:
+      - ./runtimeGenerated/gmail-sync:/data
+    depends_on:
+      - ollama
+
+  ollama:
+    container_name: ollama
+    image: ollama/ollama
+    restart: unless-stopped
+    volumes:
+      - ./runtimeGenerated/ollama:/root/.ollama

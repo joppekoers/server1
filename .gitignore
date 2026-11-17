@@ -23,3 +23,6 @@
 /cloudflare/terraform.tfstate
 /cloudflare/terraform.tfstate.backup
 /cloudflare/*.tfplan
+
+/gmail-sync/data
+/gmail-sync/node_modules
