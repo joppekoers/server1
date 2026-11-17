@@ -97,9 +97,9 @@ curl -s -X POST -H "Authorization: Bearer $DASHBOARD_TOKEN" \
 ```
 
 - `days` defaults to 30 and is clamped to 1 to 365. Only INBOX emails are fetched, and emails already stored are skipped.
-- It returns `202` straight away with the number of new emails and parses them in the background, oldest first. The dashboard's first line shows the progress, for example `OK · synced 2m ago · backfill 3/37`.
+- It returns `202` straight away with the number of new emails and adds them to the queue (see below), oldest first. The dashboard's first line shows the progress, for example `OK · synced 2m ago · backfill 3/37`.
 - A second request while a backfill runs returns `409`.
-- If it stops halfway, for example because Ollama is down, run the same request again; it continues with the emails that are not stored yet.
+- The backfill lives in the queue, so it continues after a restart. To cancel it, delete its rows: `DELETE FROM queue WHERE source = 'backfill'`.
 - On CPU each email takes 30 to 120 seconds, so a month of mail can take hours.
 
 ## Order tracking
@@ -110,13 +110,19 @@ Every new email goes to the model with a JSON schema. The model returns whether 
 - Emails about the same order are merged on order number or tracking number, so a shop's confirmation and the carrier's tracking email become one order.
 - An older email, for example during a catch-up, only fills in missing fields and never overwrites the status of a newer one.
 - Statuses: `ordered`, `shipped`, `out_for_delivery`, `delivered`, `delayed`, `cancelled`, `returned`.
-- If Ollama fails, the email is not stored and is retried 30 seconds later, so no order is missed.
+- If Ollama fails, the email stays in the queue and is retried 30 seconds later, so no order is missed. A failing email blocks the queue until it succeeds.
+
+### Queue
+
+Parsing is slow, so every email to parse is first added to the `queue` table by Gmail message id. A single worker takes the oldest item, fetches and stores the email if needed, parses it, and removes it from the queue in the same transaction. Because the queue is in SQLite, a restart continues where it stopped.
+
+The queue has three sources: `new` (from the Gmail sync), `backfill` and `reparse`. `new` emails always go first, so a fresh order email does not wait behind a long backfill. The dashboard shows `N queued` for `new` and `reparse` items.
 
 ### Re-parsing after changes
 
-Each email's model result is stored in `email_extractions` with a version hash of everything that affects the output: model, model options, system prompt, JSON schema, and the code that turns an email into model input (`htmlToText`, `userMessage`). When that hash changes, for example after editing the prompt, every stored email is parsed again on the next startup or sync, oldest first.
+Each email's model result is stored in `email_extractions` with a version hash of everything that affects the output: model, model options, system prompt, JSON schema, and the code that turns an email into model input (`htmlToText`, `userMessage`). When that hash changes, for example after editing the prompt, every stored email is added to the queue as `reparse` on the next startup, oldest first.
 
-Orders are then rebuilt from the stored results, so changes to the merge logic also apply to existing orders. On startup the orders are always rebuilt. If Ollama fails halfway, the existing orders are left untouched and the remaining emails are retried on the next sync. On CPU, re-parsing takes 30 to 120 seconds per email.
+Once no `backfill` or `reparse` items are left in the queue, orders are rebuilt from the stored results, so changes to the merge logic also apply to existing orders. On startup the orders are also rebuilt when nothing is queued. On CPU, re-parsing takes 30 to 120 seconds per email.
 
 ## Data
 
@@ -125,11 +131,12 @@ Everything lives in `data/gmail-sync.db` (SQLite):
 | Table | Contents |
 |---|---|
 | `emails` | Every stored email, including text and HTML bodies |
-| `email_extractions` | The model result per email, with the extraction version it was made with |
+| `email_extractions` | The model result per email, with the extraction version it was made with and how long parsing took (`duration_ms`) |
+| `queue` | Emails waiting to be parsed, with their source (`new`, `backfill`, `reparse`) |
 | `orders` | One row per order with its latest status and products, rebuilt from `email_extractions` |
 | `order_events` | One row per email that changed an order |
 | `logs` | All log output (also printed to stdout) |
-| `kv` | OAuth refresh token, sync position, last sync time, watch expiry |
+| `kv` | OAuth refresh token, sync position, last sync time, watch expiry, backfill size |
 
 ```sh
 sqlite3 data/gmail-sync.db "SELECT merchant, order_number, status, tracking_url FROM orders ORDER BY updated_at DESC"
@@ -145,6 +152,24 @@ Data from older versions (JSON files and `app.log` in `data/`) is imported into 
 `make up` from the repo root starts the `gmail-sync` and `ollama` services. Data lives in `runtimeGenerated/gmail-sync`, the model in `runtimeGenerated/ollama`. nginx forwards `joppekoers.nl/proxy/gmail-sync/*` to the dashboard.
 
 Ollama runs on CPU, so classifying one email takes roughly 30 to 120 seconds and uses about 6 GB of RAM while the model is loaded.
+
+### Ollama has no internet access
+
+Ollama is only on the `llm` Docker network, which is `internal: true`: it has no route to the internet and only `gmail-sync` can reach it. Whatever Ollama's code does, your emails cannot leave the server through it. `gmail-sync` is on both `llm` and the default network, because it needs to reach Google.
+
+Because of this, Ollama cannot download models. The app checks on startup that `OLLAMA_MODEL` is present and exits if it is not. To pull a new model, connect Ollama to the internet for a moment:
+
+```sh
+docker network connect server1_default ollama
+docker exec ollama ollama pull qwen3:8b
+docker network disconnect server1_default ollama
+```
+
+To check that the isolation works, this should fail:
+
+```sh
+docker exec ollama timeout 5 bash -c 'echo > /dev/tcp/1.1.1.1/443' && echo "has internet" || echo "isolated"
+```
 
 The first login needs a browser that can reach port 8085 in the container. That port is only bound to the server's localhost, so tunnel it:
 

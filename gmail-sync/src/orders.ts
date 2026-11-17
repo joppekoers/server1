@@ -78,17 +78,15 @@ status meanings: ordered = order placed/confirmed, shipped = handed to carrier o
 items lists every product in the order. name is the product name as a shopper would say it (e.g. "Oversized Cotton T-Shirt - Black, M"), never an article number, SKU or code; if the email only shows codes, name is null. sku is the article/product code if shown. quantity is the number ordered.
 Copy order numbers, tracking numbers and URLs exactly as written. Use null for anything not stated. estimatedDelivery is an ISO date (YYYY-MM-DD) or null.`;
 
+// Ollama has no internet access, so a missing model has to be pulled by hand (see README).
 export async function ensureModel() {
-  console.log(`Pulling ${MODEL} (no-op when already present)`);
   const res = await attempt(
-    fetch(`${OLLAMA_URL}/api/pull`, {
-      timeout: false,
-      method: "POST",
-      body: JSON.stringify({ model: MODEL, stream: false }),
-    }),
+    fetch(`${OLLAMA_URL}/api/show`, { method: "POST", body: JSON.stringify({ model: MODEL }) }),
   );
   if (res instanceof Error) return res;
-  if (!res.ok) return new HttpError(`Ollama pull ${res.status}: ${await attempt(res.text())}`, res.status);
+  if (res.status === 404) return new Error(`Model ${MODEL} is not available in Ollama, pull it first (see README)`);
+  if (!res.ok) return new HttpError(`Ollama show ${res.status}: ${await attempt(res.text())}`, res.status);
+  console.log(`Using model ${MODEL}`);
 }
 
 function htmlToText(html: string) {

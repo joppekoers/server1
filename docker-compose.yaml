@@ -196,6 +196,9 @@ services:
       - ./runtimeGenerated/gmail-sync:/data
     depends_on:
       - ollama
+    networks:
+      - default
+      - llm
 
   ollama:
     container_name: ollama
@@ -203,3 +206,10 @@ services:
     restart: unless-stopped
     volumes:
       - ./runtimeGenerated/ollama:/root/.ollama
+    # Only reachable from gmail-sync, with no route to the internet, so emails cannot leave the server.
+    networks:
+      - llm
+
+networks:
+  llm:
+    internal: true
