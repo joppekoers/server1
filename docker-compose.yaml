@@ -161,6 +161,8 @@ services:
         condition: service_started
       jellyfin:
         condition: service_started
+      gmail-sync:
+        condition: service_started
 
   movie-sync:
     container_name: movie-sync

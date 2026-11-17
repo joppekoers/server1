@@ -1,4 +1,5 @@
 import "./log";
+import { startDashboard } from "./dashboard";
 import { emailExists, getKv, setKv } from "./db";
 import { migrateLegacyJson } from "./migrate";
 import { ensureModel, processEmail } from "./orders";
@@ -91,6 +92,7 @@ async function authorizeInteractively() {
 }
 
 await migrateLegacyJson();
+startDashboard(requireEnv("DASHBOARD_TOKEN"));
 const refreshToken = getKv("refreshToken") ?? (await authorizeInteractively());
 
 let accessToken = "";
@@ -193,6 +195,7 @@ async function syncHistory(state: State) {
   }
   state.historyId = latestHistoryId;
   saveState(state);
+  setKv("lastSyncAt", new Date().toISOString());
 }
 
 async function pullNotifications() {
