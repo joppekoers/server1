@@ -1,10 +1,10 @@
 import { timingSafeEqual } from "crypto";
-import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, notInArray, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, notInArray, or } from "drizzle-orm";
 import express from "express";
 import { db, getKv } from "./db";
 import { exitOnError } from "./errors";
 import { countQueued } from "./queue";
-import { emailExtractions, logs, orderEvents, orders, type OrderStatus } from "./schema";
+import { logs, orderEvents, orders, type OrderStatus } from "./schema";
 
 const PORT = Number(process.env.DASHBOARD_PORT ?? 8086);
 const DEFAULT_WIDTH = 120;
@@ -30,7 +30,7 @@ const WATCH_WARN_MS = 24 * 60 * 60_000;
 const ERROR_WINDOW_MS = 60 * 60_000;
 
 type Order = typeof orders.$inferSelect;
-type EventRow = typeof orderEvents.$inferSelect & { durationMs: number | null };
+type OrderEvent = typeof orderEvents.$inferSelect;
 
 function timeAgo(iso: string, now: number) {
   const seconds = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
@@ -38,13 +38,6 @@ function timeAgo(iso: string, now: number) {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
-}
-
-function formatDuration(ms: number) {
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 1) return "<1s";
-  const minutes = Math.floor(seconds / 60);
-  return minutes ? `${minutes}m${seconds % 60}s` : `${seconds}s`;
 }
 
 const known = (value: string | null) => (value && !PLACEHOLDER.test(value.trim()) ? value.trim() : null);
@@ -109,12 +102,12 @@ function productLines(order: Order, width: number) {
   );
 }
 
-function emailLine(event: EventRow, now: number, width: number) {
-  const parsed = event.durationMs === null ? "" : `AI took ${formatDuration(event.durationMs)}`;
-  return fit(`  ${timeAgo(event.at, now).padEnd(8)} email: ${formatStatus(event.status).padEnd(16)} ${parsed}`.trimEnd(), width);
+function emailLine(event: OrderEvent, now: number, width: number) {
+  const subject = event.subject?.trim() ? `"${event.subject.trim()}"` : "(no subject)";
+  return fit(`  ${timeAgo(event.at, now).padEnd(8)} ${formatStatus(event.status).padEnd(16)} ${subject}`, width);
 }
 
-function renderOrder(order: Order, events: EventRow[], now: number, width: number) {
+function renderOrder(order: Order, events: OrderEvent[], now: number, width: number) {
   const reference = known(order.orderNumber) ?? known(order.trackingNumber);
   const eta = formatDate(order.estimatedDelivery, now);
   const left = `${known(order.merchant) ?? "Unknown shop"} · ${reference ? `order ${reference}` : "no order number"}`;
@@ -179,9 +172,8 @@ function renderDashboard(width: number) {
     .orderBy(asc(orders.updatedAt))
     .all();
   const events = db
-    .select({ ...getTableColumns(orderEvents), durationMs: emailExtractions.durationMs })
+    .select()
     .from(orderEvents)
-    .leftJoin(emailExtractions, eq(emailExtractions.emailId, orderEvents.emailId))
     .where(
       inArray(
         orderEvents.orderId,
