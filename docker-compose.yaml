@@ -141,7 +141,6 @@ services:
     restart: unless-stopped
     image: nginx:alpine
     environment:
-      - CERTBOT_EMAIL=joppe.koers@gmail.com
       # - STAGING=1
       # - USE_ECDSA=1 # maybe in the future
       - DHPARAM_SIZE=2048
