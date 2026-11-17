@@ -12,9 +12,8 @@ const MAX_WIDTH = 300;
 const FINISHED_STATUSES: OrderStatus[] = ["delivered", "cancelled", "returned"];
 const FINISHED_LOOKBACK_MS = 14 * 24 * 60 * 60_000;
 const COLUMN_GAP = "  ";
-const MAX_LINES_PER_ORDER = 4;
 const MIN_PRODUCTS_WIDTH = 20;
-const EMAIL_LINKS_PER_ORDER = 4;
+const EMAILS_PER_ORDER = 4;
 const DEFAULT_BACKFILL_DAYS = 30;
 const MAX_BACKFILL_DAYS = 365;
 
@@ -58,7 +57,7 @@ const COLUMNS: Column[] = [
       order.items
         .filter((item) => item.name)
         .map((item) => `${item.quantity && item.quantity > 1 ? `${item.quantity}x ` : ""}${item.name}`)
-        .join(", ") || "-",
+        .join("\n") || "-",
   },
   { title: "STATUS", maxWidth: 16, dropOrder: 6, value: (order) => (order.status ?? "unknown").replaceAll("_", " ") },
   { title: "ETA", maxWidth: 10, dropOrder: 2, value: (order) => order.estimatedDelivery ?? "-" },
@@ -68,7 +67,11 @@ const COLUMNS: Column[] = [
 const fit = (text: string, width: number) =>
   [...text].length <= width ? text.padEnd(width) : [...text].slice(0, width - 1).join("") + "…";
 
-function wrapCell(text: string, width: number, maxLines: number) {
+const cellWidth = (text: string) => Math.max(...text.split("\n").map((line) => [...line].length));
+
+const wrapCell = (text: string, width: number) => text.split("\n").flatMap((line) => wrapLine(line, width));
+
+function wrapLine(text: string, width: number) {
   const lines: string[] = [];
   let line = "";
   for (const word of text.split(/\s+/).filter(Boolean)) {
@@ -87,15 +90,12 @@ function wrapCell(text: string, width: number, maxLines: number) {
     }
   }
   if (line || lines.length === 0) lines.push(line);
-  if (lines.length <= maxLines) return lines;
-  const kept = lines.slice(0, maxLines);
-  kept[maxLines - 1] = fit(`${kept[maxLines - 1]} ${lines[maxLines]}`, width).trimEnd();
-  return kept;
+  return lines;
 }
 
 function renderTable(rows: string[][], columns: Column[], width: number, extras: string[][]): string {
   const widths = columns.map((column, i) =>
-    Math.min(column.maxWidth, Math.max(column.title.length, ...rows.map((row) => [...row[i]].length))),
+    Math.min(column.maxWidth, Math.max(column.title.length, ...rows.map((row) => cellWidth(row[i])))),
   );
   const flexIndex = columns.findIndex((column) => column.flexible);
   const fixedWidth = widths.reduce((sum, w, i) => (i === flexIndex ? sum : sum + w), 0);
@@ -117,18 +117,17 @@ function renderTable(rows: string[][], columns: Column[], width: number, extras:
   const header = columns.map((column, i) => fit(column.title, widths[i])).join(COLUMN_GAP).trimEnd();
   const indent = " ".repeat(widths[0] + COLUMN_GAP.length);
   const rowLines = (cells: string[], rowIndex: number) => {
-    const wrapped = cells.map((cell, i) => wrapCell(cell, widths[i], MAX_LINES_PER_ORDER));
+    const wrapped = cells.map((cell, i) => wrapCell(cell, widths[i]));
     const height = Math.max(...wrapped.map((lines) => lines.length));
     const lines = Array.from({ length: height }, (_, lineIndex) =>
       wrapped.map((lines, i) => fit(lines[lineIndex] ?? "", widths[i])).join(COLUMN_GAP).trimEnd(),
     );
-    return [...lines, ...extras[rowIndex].map((extra) => (indent.length + [...extra].length <= width ? indent + extra : extra))];
+    const extraLines = extras[rowIndex].map((extra) =>
+      indent.length + [...extra].length <= width ? indent + extra : fit(extra, width).trimEnd(),
+    );
+    return [...lines, ...extraLines];
   };
   return [header, ...rows.flatMap(rowLines)].join("\n");
-}
-
-function emailLink(emailId: string) {
-  return `https://mail.google.com/mail/u/${getKv("emailAddress") ?? "0"}/#all/${emailId}`;
 }
 
 function formatDuration(ms: number | null) {
@@ -141,12 +140,9 @@ function formatDuration(ms: number | null) {
 
 type EventRow = typeof orderEvents.$inferSelect & { durationMs: number | null };
 
-// Links are never shortened because a cut-off URL cannot be opened, so on very narrow widths they may exceed the width.
-function emailLinkLine(event: EventRow, now: number, width: number) {
-  const link = emailLink(event.emailId);
+function emailLine(event: EventRow, now: number) {
   const status = (event.status ?? "-").replaceAll("_", " ").padEnd(16);
-  const full = `${status}  ${timeAgo(event.at, now).padEnd(8)}  ${formatDuration(event.durationMs).padStart(6)}  ${link}`;
-  return [...full].length <= width ? full : link;
+  return `${status}  ${timeAgo(event.at, now).padEnd(8)}  ${formatDuration(event.durationMs).padStart(6)}`;
 }
 
 function healthLine(now: number) {
@@ -210,8 +206,8 @@ function renderDashboard(width: number) {
   const extras = visibleOrders.map((order) =>
     events
       .filter((event) => event.orderId === order.id)
-      .slice(0, EMAIL_LINKS_PER_ORDER)
-      .map((event) => emailLinkLine(event, now, width)),
+      .slice(0, EMAILS_PER_ORDER)
+      .map((event) => emailLine(event, now)),
   );
   return `${status}\n${renderTable(rows, COLUMNS, width, extras)}\n`;
 }
