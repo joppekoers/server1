@@ -52,6 +52,16 @@ export const emailExtractions = sqliteTable("email_extractions", {
   durationMs: integer("duration_ms"),
 });
 
+export const QUEUE_SOURCES = ["new", "backfill", "reparse"] as const;
+export type QueueSource = (typeof QUEUE_SOURCES)[number];
+
+export const queue = sqliteTable("queue", {
+  id: integer().primaryKey(),
+  messageId: text("message_id").notNull().unique(),
+  source: text({ enum: QUEUE_SOURCES }).notNull(),
+  enqueuedAt: text("enqueued_at").notNull(),
+});
+
 export const orders = sqliteTable(
   "orders",
   {

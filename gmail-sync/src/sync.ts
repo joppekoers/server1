@@ -1,9 +1,10 @@
 import "./log";
 import { startDashboard } from "./dashboard";
-import { emailExists, getKv, setKv } from "./db";
+import { emailExists, getEmail, getKv, insertEmail, setKv, type StoredEmail } from "./db";
 import { attempt, exitOnError, HttpError, readJson } from "./errors";
 import { migrateLegacyJson } from "./migrate";
-import { ensureModel, processEmail, reparseStaleEmails } from "./orders";
+import { enqueueStaleEmails, ensureModel, processQueuedEmail, rebuildOrders } from "./orders";
+import { countQueued, dequeue, enqueue, hasPendingRebuild, nextQueued } from "./queue";
 
 const CLIENT_ID = exitOnError(requireEnv("GOOGLE_CLIENT_ID"));
 const CLIENT_SECRET = exitOnError(requireEnv("GOOGLE_CLIENT_SECRET"));
@@ -17,6 +18,7 @@ const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.g
 const BACKSTOP_SYNC_MS = 10 * 60_000;
 const WATCH_RENEW_MARGIN_MS = 24 * 60 * 60_000;
 const RETRY_DELAY_MS = 30_000;
+const QUEUE_IDLE_MS = 2_000;
 
 interface State {
   historyId?: string;
@@ -102,7 +104,6 @@ async function authorizeInteractively() {
 }
 
 exitOnError(await migrateLegacyJson());
-const backfillProgress = { running: false, done: 0, total: 0 };
 startDashboard(exitOnError(requireEnv("DASHBOARD_TOKEN")), { start: startBackfill, progress: backfillProgress });
 const refreshToken = getKv("refreshToken") ?? exitOnError(await authorizeInteractively());
 
@@ -152,15 +153,13 @@ function decodeBodies(part: MessagePart, result: { text: string[]; html: string[
   return result;
 }
 
-async function saveMessage(id: string) {
-  if (emailExists(id)) return;
-
+async function fetchEmail(id: string): Promise<StoredEmail | Error> {
   const message = await api<GmailMessage>(`${GMAIL}/messages/${id}?format=full`);
   if (message instanceof Error) return message;
   const header = (name: string) =>
     message.payload.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value;
   const bodies = decodeBodies(message.payload, { text: [], html: [], attachments: [] });
-  const email = {
+  return {
     id: message.id,
     threadId: message.threadId,
     labelIds: message.labelIds,
@@ -175,10 +174,42 @@ async function saveMessage(id: string) {
     attachments: bodies.attachments,
     headers: message.payload.headers,
   };
+}
 
-  const processed = await processEmail(email);
-  if (processed instanceof Error) return processed;
-  console.log(`Saved ${id}: ${email.subject}`);
+// The email is stored before parsing so a retry or restart does not fetch it from Gmail again.
+async function processNextQueued() {
+  const item = nextQueued();
+  if (!item) return false;
+
+  let email = getEmail(item.messageId);
+  if (!email) {
+    const fetched = await fetchEmail(item.messageId);
+    if (fetched instanceof HttpError && fetched.status === 404) {
+      console.warn(`Queued email ${item.messageId} no longer exists in Gmail, skipping`);
+      dequeue(item.messageId);
+      return true;
+    }
+    if (fetched instanceof Error) return fetched;
+    insertEmail(fetched);
+    email = fetched;
+  }
+
+  const processed = await processQueuedEmail(email, item.source);
+  if (processed instanceof Error) return new Error(`Parsing ${item.messageId} failed: ${processed.message}`, { cause: processed });
+  console.log(`Parsed ${item.messageId} (${item.source}): ${email.subject}`);
+  return true;
+}
+
+async function runQueue() {
+  while (true) {
+    const result = await processNextQueued();
+    if (result instanceof Error) {
+      console.error(result);
+      await Bun.sleep(RETRY_DELAY_MS);
+    } else if (!result) {
+      await Bun.sleep(QUEUE_IDLE_MS);
+    }
+  }
 }
 
 async function listRecentInboxMessageIds(days: number) {
@@ -199,34 +230,25 @@ async function listRecentInboxMessageIds(days: number) {
   return ids;
 }
 
-async function runBackfill(ids: string[]) {
-  for (const id of ids) {
-    const saved = await saveMessage(id);
-    if (saved instanceof Error) return saved;
-    backfillProgress.done++;
-  }
-  return reparseStaleEmails({ rebuild: true });
+let backfillListing = false;
+
+function backfillProgress() {
+  const remaining = countQueued("backfill");
+  const total = Number(getKv("backfillTotal") ?? 0);
+  return { running: backfillListing || remaining > 0, done: Math.max(0, total - remaining), total };
 }
 
 async function startBackfill(days: number) {
-  if (backfillProgress.running) return null;
-  Object.assign(backfillProgress, { running: true, done: 0, total: 0 });
+  if (backfillProgress().running) return null;
+  backfillListing = true;
   const listed = await listRecentInboxMessageIds(days);
-  if (listed instanceof Error) {
-    backfillProgress.running = false;
-    return listed;
-  }
-  // Gmail lists newest first; processing oldest first lets each order end with its latest status.
-  const ids = listed.filter((id) => !emailExists(id)).reverse();
-  backfillProgress.total = ids.length;
-  console.log(`Backfill of the last ${days} days: ${ids.length} new emails`);
-
-  void runBackfill(ids).then((result) => {
-    backfillProgress.running = false;
-    if (result instanceof Error) console.error(`Backfill stopped after ${backfillProgress.done} of ${ids.length} emails:`, result);
-    else console.log(`Backfill finished: ${ids.length} emails parsed`);
-  });
-  return ids.length;
+  backfillListing = false;
+  if (listed instanceof Error) return listed;
+  // Gmail lists newest first; queueing oldest first lets each order end with its latest status.
+  const queued = enqueue(listed.filter((id) => !emailExists(id)).reverse(), "backfill");
+  setKv("backfillTotal", String(queued));
+  console.log(`Backfill of the last ${days} days: ${queued} new emails queued`);
+  return queued;
 }
 
 type HistoryPage = {
@@ -257,12 +279,11 @@ async function syncHistory(state: State) {
     }
     if (page instanceof Error) return page;
 
-    for (const entry of page.history ?? []) {
-      for (const { message } of entry.messagesAdded ?? []) {
-        const saved = await saveMessage(message.id);
-        if (saved instanceof Error) return saved;
-      }
-    }
+    const added = (page.history ?? []).flatMap((entry) => (entry.messagesAdded ?? []).map(({ message }) => message.id));
+    enqueue(
+      added.filter((id) => !emailExists(id)),
+      "new",
+    );
     latestHistoryId = page.historyId;
     pageToken = page.nextPageToken;
   } while (pageToken);
@@ -295,8 +316,9 @@ const state: State = {
 };
 exitOnError(await ensureWatch(state));
 exitOnError(await syncHistory(state));
-const startupReparse = await reparseStaleEmails({ rebuild: true });
-if (startupReparse instanceof Error) console.error(startupReparse);
+enqueueStaleEmails();
+if (!hasPendingRebuild()) rebuildOrders();
+void runQueue();
 
 let lastSync = Date.now();
 
@@ -309,8 +331,6 @@ async function tick() {
   if (watched instanceof Error) return watched;
   const synced = await syncHistory(state);
   if (synced instanceof Error) return synced;
-  const reparsed = await reparseStaleEmails();
-  if (reparsed instanceof Error) return reparsed;
   lastSync = Date.now();
 }
 

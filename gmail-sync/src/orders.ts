@@ -1,7 +1,8 @@
 import { createHash } from "crypto";
 import { asc, eq, isNull, ne, or } from "drizzle-orm";
-import { db, insertEmail, type StoredEmail } from "./db";
+import { db, type StoredEmail } from "./db";
 import { attempt, HttpError, parseJson, toError } from "./errors";
+import { dequeue, enqueue, hasPendingRebuild } from "./queue";
 import {
   emailExtractions,
   emails,
@@ -11,6 +12,7 @@ import {
   type Extraction,
   type OrderItem,
   type OrderStatus,
+  type QueueSource,
 } from "./schema";
 
 const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://localhost:11434";
@@ -262,15 +264,19 @@ function applyExtraction(email: EmailRef, extraction: Extraction | null) {
   return order;
 }
 
-export async function processEmail(email: StoredEmail) {
+export async function processQueuedEmail(email: StoredEmail, source: QueueSource) {
   const extraction = await timedExtract(email);
   if (extraction instanceof Error) return extraction;
   const order = db.transaction(() => {
-    insertEmail(email);
     saveExtraction(email.id, extraction.result, extraction.durationMs);
+    dequeue(email.id);
     return applyExtraction(email, extraction.result);
   });
   if (order) console.log(`Order ${order.merchant ?? "?"} ${order.orderNumber ?? order.trackingNumber}: ${order.status}`);
+  if (source !== "new" && !hasPendingRebuild()) {
+    rebuildOrders();
+    console.log("Backfill and re-parse queue empty, rebuilt orders");
+  }
 }
 
 export function rebuildOrders() {
@@ -293,37 +299,17 @@ export function rebuildOrders() {
   });
 }
 
-export async function reparseStaleEmails({ rebuild = false } = {}) {
+export function enqueueStaleEmails() {
   const stale = db
-    .select({ email: emails })
+    .select({ id: emails.id })
     .from(emails)
     .leftJoin(emailExtractions, eq(emails.id, emailExtractions.emailId))
     .where(or(isNull(emailExtractions.version), ne(emailExtractions.version, EXTRACTION_VERSION)))
     .orderBy(asc(emails.receivedAt))
     .all();
-  if (stale.length === 0) {
-    if (rebuild) rebuildOrders();
-    return;
-  }
-
-  console.log(`Re-parsing ${stale.length} emails for extraction version ${EXTRACTION_VERSION}`);
-  for (const [index, { email }] of stale.entries()) {
-    const extraction = await timedExtract({
-      ...email,
-      from: email.fromAddress ?? undefined,
-      to: email.toAddress ?? undefined,
-      cc: email.cc ?? undefined,
-      subject: email.subject ?? undefined,
-      snippet: email.snippet ?? "",
-    });
-    if (extraction instanceof Error) {
-      return new Error(
-        `Re-parsing stopped at ${index} of ${stale.length} emails, orders are rebuilt once all are done: ${extraction.message}`,
-        { cause: extraction },
-      );
-    }
-    saveExtraction(email.id, extraction.result, extraction.durationMs);
-  }
-  rebuildOrders();
-  console.log(`Re-parsed ${stale.length} emails and rebuilt orders`);
+  const queued = enqueue(
+    stale.map((row) => row.id),
+    "reparse",
+  );
+  if (queued > 0) console.log(`Queued ${queued} emails for re-parsing with extraction version ${EXTRACTION_VERSION}`);
 }

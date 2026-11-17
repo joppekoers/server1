@@ -41,6 +41,20 @@ export const setKv = (key: string, value: string) =>
 export const emailExists = (id: string) =>
   db.select({ id: schema.emails.id }).from(schema.emails).where(eq(schema.emails.id, id)).get() !== undefined;
 
+export function getEmail(id: string): StoredEmail | undefined {
+  const row = db.select().from(schema.emails).where(eq(schema.emails.id, id)).get();
+  if (!row) return undefined;
+  const { fromAddress, toAddress, cc, subject, snippet, ...rest } = row;
+  return {
+    ...rest,
+    from: fromAddress ?? undefined,
+    to: toAddress ?? undefined,
+    cc: cc ?? undefined,
+    subject: subject ?? undefined,
+    snippet: snippet ?? "",
+  };
+}
+
 export function insertEmail(email: StoredEmail) {
   db.insert(schema.emails)
     .values({

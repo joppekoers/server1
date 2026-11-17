@@ -3,6 +3,7 @@ import { and, count, desc, eq, getTableColumns, gte, inArray, isNull, notInArray
 import express from "express";
 import { db, getKv } from "./db";
 import { exitOnError } from "./errors";
+import { countQueued } from "./queue";
 import { emailExtractions, logs, orderEvents, orders, type OrderStatus } from "./schema";
 
 const PORT = Number(process.env.DASHBOARD_PORT ?? 8086);
@@ -19,7 +20,7 @@ const MAX_BACKFILL_DAYS = 365;
 
 export interface Backfill {
   start: (days: number) => Promise<number | null | Error>;
-  progress: { running: boolean; done: number; total: number };
+  progress: () => { running: boolean; done: number; total: number };
 }
 
 let backfillState: Backfill | undefined;
@@ -165,8 +166,12 @@ function healthLine(now: number) {
   else if (watchExpiration - now < WATCH_WARN_MS) warn.push("gmail watch expires within a day");
   if (recentErrors > 0) warn.push(`${recentErrors} error${recentErrors === 1 ? "" : "s"} in last hour`);
 
-  const progress = backfillState?.progress;
-  const info = progress?.running ? [`backfill ${progress.done}/${progress.total}`] : [];
+  const progress = backfillState?.progress();
+  const queued = countQueued("new", "reparse");
+  const info = [
+    ...(queued > 0 ? [`${queued} queued`] : []),
+    ...(progress?.running ? [`backfill ${progress.done}/${progress.total}`] : []),
+  ];
 
   if (down.length) return ["DOWN", ...down, ...warn, ...info].join(" · ");
   if (warn.length) return ["WARN", ...warn, ...info].join(" · ");
@@ -251,7 +256,7 @@ export function startDashboard(token: string, backfill: Backfill) {
       return;
     }
     if (queued === null) {
-      const { done, total } = backfill.progress;
+      const { done, total } = backfill.progress();
       res.status(409).send(`Backfill already running (${done}/${total})\n`);
       return;
     }
