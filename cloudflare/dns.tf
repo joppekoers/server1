@@ -7,15 +7,6 @@ resource "cloudflare_dns_record" "nl_shop_acme_challenge" {
   ttl     = 1
 }
 
-resource "cloudflare_dns_record" "nl_asus_laptop" {
-  zone_id = cloudflare_zone.nl.id
-  name    = "asus-laptop.joppekoers.nl"
-  type    = "CNAME"
-  content = "${cloudflare_zero_trust_tunnel_cloudflared.asus_laptop.id}.cfargotunnel.com"
-  proxied = true
-  ttl     = 1
-}
-
 resource "cloudflare_dns_record" "nl_dev" {
   zone_id = cloudflare_zone.nl.id
   name    = "dev.joppekoers.nl"
@@ -79,11 +70,11 @@ resource "cloudflare_dns_record" "nl_ssh" {
   ttl     = 1
 }
 
-resource "cloudflare_dns_record" "nl_stormtrooper" {
+resource "cloudflare_dns_record" "nl_stormtrooper_backup" {
   zone_id = cloudflare_zone.nl.id
-  name    = "stormtrooper.joppekoers.nl"
+  name    = "stormtrooper-backup.joppekoers.nl"
   type    = "CNAME"
-  content = "${cloudflare_zero_trust_tunnel_cloudflared.stormtrooper.id}.cfargotunnel.com"
+  content = "${cloudflare_zero_trust_tunnel_cloudflared.stormtrooper_backup.id}.cfargotunnel.com"
   proxied = true
   ttl     = 1
 }

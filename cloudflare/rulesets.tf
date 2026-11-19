@@ -30,7 +30,7 @@ resource "cloudflare_ruleset" "nl_firewall_custom" {
     },
     {
       description = "always challenge"
-      expression  = "(not http.host in {\"joppekoers.nl\" \"pixels.joppekoers.nl\"})"
+      expression  = "(not http.host in {\"joppekoers.nl\" \"pixels.joppekoers.nl\" \"stormtrooper-backup.joppekoers.nl\"})"
       action      = "managed_challenge"
     },
   ]

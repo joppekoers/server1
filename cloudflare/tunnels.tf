@@ -4,21 +4,15 @@ resource "cloudflare_zero_trust_tunnel_cloudflared" "server1" {
   config_src = "cloudflare"
 }
 
-resource "cloudflare_zero_trust_tunnel_cloudflared" "asus_laptop" {
-  account_id = var.account_id
-  name       = "asus-laptop"
-  config_src = "cloudflare"
-}
-
 resource "cloudflare_zero_trust_tunnel_cloudflared" "offsite" {
   account_id = var.account_id
   name       = "offsite"
   config_src = "cloudflare"
 }
 
-resource "cloudflare_zero_trust_tunnel_cloudflared" "stormtrooper" {
+resource "cloudflare_zero_trust_tunnel_cloudflared" "stormtrooper_backup" {
   account_id = var.account_id
-  name       = "stormtrooper"
+  name       = "stormtrooper-backup"
   config_src = "cloudflare"
 }
 
@@ -47,17 +41,6 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "server1" {
   }
 }
 
-resource "cloudflare_zero_trust_tunnel_cloudflared_config" "asus_laptop" {
-  account_id = var.account_id
-  tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.asus_laptop.id
-  config = {
-    ingress = [
-      { hostname = "asus-laptop.joppekoers.nl", service = "ssh://192.168.1.116:22", origin_request = {} },
-      { service = "http_status:404" },
-    ]
-  }
-}
-
 resource "cloudflare_zero_trust_tunnel_cloudflared_config" "offsite" {
   account_id = var.account_id
   tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.offsite.id
@@ -69,13 +52,23 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "offsite" {
   }
 }
 
-resource "cloudflare_zero_trust_tunnel_cloudflared_config" "stormtrooper" {
+resource "cloudflare_zero_trust_tunnel_cloudflared_config" "stormtrooper_backup" {
   account_id = var.account_id
-  tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.stormtrooper.id
+  tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.stormtrooper_backup.id
   config = {
     ingress = [
-      { hostname = "stormtrooper.joppekoers.nl", service = "ssh://192.168.1.155:22", origin_request = {} },
+      { hostname = "stormtrooper-backup.joppekoers.nl", service = "ssh://localhost:22", origin_request = {} },
       { service = "http_status:404" },
     ]
   }
+}
+
+data "cloudflare_zero_trust_tunnel_cloudflared_token" "stormtrooper_backup" {
+  account_id = var.account_id
+  tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.stormtrooper_backup.id
+}
+
+output "stormtrooper_backup_tunnel_token" {
+  value     = data.cloudflare_zero_trust_tunnel_cloudflared_token.stormtrooper_backup.token
+  sensitive = true
 }

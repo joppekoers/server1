@@ -46,18 +46,8 @@ import {
 }
 
 import {
-  to = cloudflare_zero_trust_tunnel_cloudflared.asus_laptop
-  id = "${var.account_id}/31ae6d40-ef98-4927-a1e1-ea6853738dc1"
-}
-
-import {
   to = cloudflare_zero_trust_tunnel_cloudflared.offsite
   id = "${var.account_id}/3ce77971-3754-4273-91a0-9e7362877663"
-}
-
-import {
-  to = cloudflare_zero_trust_tunnel_cloudflared.stormtrooper
-  id = "${var.account_id}/c8edc1c8-b8cd-48e0-8e74-8dc87ae87d77"
 }
 
 import {
@@ -76,21 +66,6 @@ import {
 }
 
 import {
-  to = cloudflare_zero_trust_tunnel_cloudflared_config.asus_laptop
-  id = "${var.account_id}/31ae6d40-ef98-4927-a1e1-ea6853738dc1"
-}
-
-import {
-  to = cloudflare_zero_trust_tunnel_cloudflared_config.offsite
-  id = "${var.account_id}/3ce77971-3754-4273-91a0-9e7362877663"
-}
-
-import {
-  to = cloudflare_zero_trust_tunnel_cloudflared_config.stormtrooper
-  id = "${var.account_id}/c8edc1c8-b8cd-48e0-8e74-8dc87ae87d77"
-}
-
-import {
   to = cloudflare_zero_trust_organization.this
   id = var.account_id
 }
@@ -103,11 +78,6 @@ import {
 import {
   to = cloudflare_dns_record.nl_shop_acme_challenge
   id = "1c1ae2632c5e4291802a66b6a16f12f7/9b7c315dbfc5d0355afc75b1453930c8"
-}
-
-import {
-  to = cloudflare_dns_record.nl_asus_laptop
-  id = "1c1ae2632c5e4291802a66b6a16f12f7/7104d17c28f1f4bc8018495160a65125"
 }
 
 import {
@@ -131,11 +101,6 @@ import {
 }
 
 import {
-  to = cloudflare_dns_record.nl_offsite
-  id = "1c1ae2632c5e4291802a66b6a16f12f7/306c5b4cd8edbd5312ab287251a81290"
-}
-
-import {
   to = cloudflare_dns_record.nl_shop
   id = "1c1ae2632c5e4291802a66b6a16f12f7/dbe12eb1edeef113079ea8cc99df5299"
 }
@@ -143,11 +108,6 @@ import {
 import {
   to = cloudflare_dns_record.nl_ssh
   id = "1c1ae2632c5e4291802a66b6a16f12f7/64eb7cbbbcf70ac9477254ecd561dbf9"
-}
-
-import {
-  to = cloudflare_dns_record.nl_stormtrooper
-  id = "1c1ae2632c5e4291802a66b6a16f12f7/a00aa9428c9aabb16848066a8f8639c6"
 }
 
 import {
